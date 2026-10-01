@@ -1,0 +1,62 @@
+{
+  "name": "LifeHub · 我的学习生活管理",
+  "short_name": "LifeHub",
+  "description": "日程待办、学习规划、群消息一键归档、饮食作息与账本，全部离线可用。",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "portrait",
+  "background_color": "#0f1115",
+  "theme_color": "#3b6ef6",
+  "lang": "zh-CN",
+  "dir": "ltr",
+  "categories": ["productivity", "lifestyle", "education"],
+  "prefer_related_applications": false,
+  "icons": [
+    {
+      "src": "icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "一键导入",
+      "short_name": "导入",
+      "url": "./index.html#import",
+      "description": "粘贴群消息自动归档"
+    },
+    {
+      "name": "记饮食",
+      "short_name": "饮食",
+      "url": "./index.html#body",
+      "description": "记录今天三餐"
+    },
+    {
+      "name": "记一笔",
+      "short_name": "账本",
+      "url": "./index.html#money",
+      "description": "记录一笔收支"
+    }
+  ]
+}

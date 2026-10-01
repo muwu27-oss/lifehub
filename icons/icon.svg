@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#4f7ef8"/>
+      <stop offset="55%" stop-color="#3b6ef6"/>
+      <stop offset="100%" stop-color="#8b5cf6"/>
+    </linearGradient>
+    <linearGradient id="g2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.98"/>
+      <stop offset="100%" stop-color="#e6ecff" stop-opacity="0.92"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 圆角底板 -->
+  <rect width="512" height="512" rx="116" fill="url(#g)"/>
+
+  <!-- 内部柔光 -->
+  <circle cx="150" cy="118" r="150" fill="#ffffff" opacity="0.13"/>
+  <circle cx="400" cy="430" r="170" fill="#000000" opacity="0.07"/>
+
+  <!-- 日历主体 -->
+  <rect x="104" y="140" width="304" height="272" rx="38" fill="url(#g2)"/>
+
+  <!-- 日历挂钩 -->
+  <rect x="158" y="106" width="26" height="62" rx="13" fill="#ffffff" opacity="0.95"/>
+  <rect x="328" y="106" width="26" height="62" rx="13" fill="#ffffff" opacity="0.95"/>
+
+  <!-- 顶栏分隔 -->
+  <path d="M104 214 H408" stroke="#3b6ef6" stroke-opacity="0.22" stroke-width="7"/>
+
+  <!-- 已完成勾选（左上格） -->
+  <rect x="150" y="248" width="64" height="64" rx="19" fill="#12a150" opacity="0.16"/>
+  <path d="M167 280 l13 14 l25 -29" stroke="#12a150" stroke-width="13"
+        fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- 进度条（右侧） -->
+  <rect x="240" y="262" width="118" height="17" rx="8.5" fill="#3b6ef6" opacity="0.85"/>
+  <rect x="240" y="292" width="76" height="17" rx="8.5" fill="#8b5cf6" opacity="0.66"/>
+
+  <!-- 底部两格 -->
+  <rect x="150" y="340" width="64" height="42" rx="13" fill="#0d9488" opacity="0.20"/>
+  <rect x="240" y="340" width="118" height="42" rx="13" fill="#3b6ef6" opacity="0.15"/>
+</svg>
