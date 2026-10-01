@@ -93,6 +93,20 @@
         temperature: 0.6,
         autoReviewTime: '07:00'
       },
+
+      /* ───── 代填配置（占位值，等用户后续手动替换） ─────
+         用途：有些配置项（API Key、体重、收入…）用户一时拿不到或还没想好，
+         但整个 App 又需要有个值才能正常演示/使用。
+         做法：把「代填」的值集中放在这里，界面上会显示成醒目的
+         「待确认」样式，设置页顶部也会汇总提示还有几项没填。
+         用户填了真值后，对应项自动从清单里消失。 */
+      pending: {
+        apiKey: 'sk-替换成你的百炼APIKey',   // 代填，需替换
+        weight: null,
+        dailyKcal: null,
+        monthlyIncome: null
+      },
+
       /* 提醒 */
       remind: {
         eveningHour: 18,        // 晚 6 点检查未完成
@@ -492,6 +506,67 @@
   }
 
   S.cmpTask = cmpTask;
+
+  /* ═══════════ 待填配置清单 ═══════════
+     集中列出「哪些配置还是代填的、需要用户手动替换」。
+     设置页顶部据此显示提示，填完后对应项自动消失。
+
+     判定规则：代填值放在 settings.pending 里；
+     真实值一旦填进 settings.<模块>，该项就算完成。 */
+  S.PENDING_ITEMS = [
+    {
+      key: 'apiKey',
+      label: 'AI API Key',
+      where: '设置 → AI 助手 → API Key',
+      hint: '填了才能用 AI 评价饮食、识别课表图片',
+      done: () => {
+        const k = String((S.settings.ai || {}).apiKey || '').trim();
+        /* 空、或者还是那句占位文案，都算没填 */
+        return k.length > 10 && !/替换/.test(k);
+      },
+      fill: () => { S.settings.ai.apiKey = ''; }
+    },
+    {
+      key: 'weight',
+      label: '当前体重',
+      where: '设置 → 身体与减脂目标',
+      hint: '填了才能算减脂进度',
+      done: () => S.settings.body.weight != null,
+      fill: () => { S.settings.body.weight = S.settings.pending.weight; }
+    },
+    {
+      key: 'dailyKcal',
+      label: '每日热量目标',
+      where: '设置 → 身体与减脂目标',
+      hint: '填了 AI 才能判断你今天吃多了还是少了',
+      done: () => S.settings.body.dailyKcal != null,
+      fill: () => { S.settings.body.dailyKcal = S.settings.pending.dailyKcal; }
+    },
+    {
+      key: 'monthlyIncome',
+      label: '每月收入',
+      where: '设置 → 财务',
+      hint: '填了才能算每月能攒多少',
+      done: () => S.settings.money.monthlyIncome != null,
+      fill: () => { S.settings.money.monthlyIncome = S.settings.pending.monthlyIncome; }
+    }
+  ];
+
+  /** 返回还没填的项 */
+  S.pendingList = function () {
+    return S.PENDING_ITEMS.filter(it => {
+      try { return !it.done(); } catch (e) { return false; }
+    });
+  };
+
+  /** 把一个代填值正式写入配置（用户点「使用代填值」时调用） */
+  S.applyPending = function (key) {
+    const it = S.PENDING_ITEMS.find(x => x.key === key);
+    if (!it) return false;
+    it.fill();
+    save();
+    return true;
+  };
 
   global.S = S;
 })(window);

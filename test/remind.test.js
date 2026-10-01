@@ -195,6 +195,50 @@ S.init();
 const optOut = ICS.generate({ days: 5, includeDaily: false, includeDeadline: false, includeTasks: false });
 ok('全部关掉时事件数为 0', optOut.count === 0, optOut.count);
 
+
+/* ═══════════ 9. 代填配置清单 ═══════════ */
+console.log('\n=== 9. 代填配置清单 ===');
+
+S.reset();
+S.init();
+const todo0 = S.pendingList();
+ok('初始状态下有待填项', todo0.length > 0, todo0.length + ' 项');
+ok('待填项含 API Key', todo0.some(x => x.key === 'apiKey'));
+ok('待填项含体重', todo0.some(x => x.key === 'weight'));
+
+/* 填了真 key 就该消失 */
+S.settings.ai.apiKey = 'sk-real1234567890abcdef';
+ok('填了真 key 后不在清单里', !S.pendingList().some(x => x.key === 'apiKey'));
+
+/* 占位文案不算填好 */
+S.settings.ai.apiKey = 'sk-替换成你的百炼APIKey';
+ok('占位文案仍算未填', S.pendingList().some(x => x.key === 'apiKey'));
+
+/* 空值也算未填 */
+S.settings.ai.apiKey = '';
+ok('空 key 算未填', S.pendingList().some(x => x.key === 'apiKey'));
+
+/* 填体重 */
+S.settings.body.weight = 72;
+ok('填了体重后不在清单里', !S.pendingList().some(x => x.key === 'weight'));
+
+/* applyPending 能把代填值写进去 */
+S.reset();
+S.init();
+S.settings.pending.weight = 70;
+S.applyPending('weight');
+ok('applyPending 写入了体重', S.settings.body.weight === 70, S.settings.body.weight);
+ok('写完后不在待填清单', !S.pendingList().some(x => x.key === 'weight'));
+
+/* 全部填完 → 清单为空 */
+S.reset();
+S.init();
+S.settings.ai.apiKey = 'sk-real1234567890abcdef';
+S.settings.body.weight = 70;
+S.settings.body.dailyKcal = 1800;
+S.settings.money.monthlyIncome = 3000;
+ok('全部填完后清单为空', S.pendingList().length === 0, S.pendingList().length);
+
 console.log('\n═══════════════════════════════════');
 console.log(`结果: ${pass} 通过, ${fail} 失败`);
 console.log('═══════════════════════════════════');

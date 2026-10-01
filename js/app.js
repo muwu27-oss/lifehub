@@ -191,6 +191,62 @@
     const st = S.settings;
     const body = [];
 
+    /* ───── 待填配置提示：让用户一眼看到还有哪些是代填的 ───── */
+    (function () {
+      const todo = S.pendingList();
+      if (!todo.length) {
+        body.push(U.el('div', {
+          class: 'card tight',
+          style: {
+            marginBottom: '14px', fontSize: '12.5px', color: 'var(--ok)',
+            display: 'flex', alignItems: 'center', gap: '8px'
+          }
+        }, [
+          U.svg('M20 6L9 17l-5-5', { sw: '3' }),
+          U.el('span', { text: '所有配置都已填好' })
+        ]));
+        return;
+      }
+      body.push(U.el('div', {
+        class: 'card tight',
+        style: {
+          marginBottom: '14px', borderLeft: '3px solid var(--warn)',
+          background: 'var(--warn-bg, rgba(245,158,11,.08))'
+        }
+      }, [
+        U.el('div', {
+          style: { fontWeight: '600', fontSize: '13.5px', marginBottom: '6px', color: 'var(--warn)' },
+          text: `还有 ${todo.length} 项是代填的，需要你确认`
+        }),
+        U.el('div', {
+          style: { fontSize: '12px', color: 'var(--text-dim)', lineHeight: '1.7' },
+          text: '下面这些项现在用的是占位值，功能能跑但结果不准。填上真实值后这条提示会自动消失。'
+        }),
+        U.el('div', { style: { marginTop: '8px' } }, todo.map(it =>
+          U.el('div', {
+            style: {
+              fontSize: '12px', color: 'var(--text-dim)', padding: '5px 0',
+              borderTop: '1px solid var(--line)', display: 'flex',
+              justifyContent: 'space-between', gap: '8px'
+            }
+          }, [
+            U.el('div', {}, [
+              U.el('div', { style: { color: 'var(--text)', fontWeight: '500' }, text: it.label }),
+              U.el('div', { style: { fontSize: '11px', marginTop: '2px' }, text: it.hint })
+            ]),
+            U.el('button', {
+              class: 'btn ghost sm', style: { flexShrink: '0', alignSelf: 'center' },
+              text: '去填',
+              onclick: () => {
+                /* 滚到对应区域比什么都不做有用 */
+                U.toast(it.where, 'ok');
+              }
+            })
+          ])
+        ))
+      ]));
+    })();
+
     /* 个人 / 减脂 */
     body.push(U.el('div', { class: 'section-label', text: '身体与减脂目标' }));
     const b = st.body;
@@ -234,7 +290,32 @@
     })));
 
     body.push(field('接口地址 (Base URL)', input('text', a.baseURL, v => { a.baseURL = v.trim(); }, 'https://.../v1')));
-    body.push(field('API Key', input('password', a.apiKey, v => { a.apiKey = v.trim(); }, 'sk-...')));
+    /* API Key 用「代填」值预置：功能能跑、界面能演示，
+       但设置页顶部会一直提示这是占位值，等你换成真的。
+       一旦填了像样的 key，提示自动消失。 */
+    const apiKeyFilled = (function () {
+      const k = String(a.apiKey || '').trim();
+      return k.length > 10 && !/替换/.test(k);
+    })();
+    if (!apiKeyFilled && !a.apiKey) {
+      a.apiKey = st.pending.apiKey;      // 首次打开时预置占位值
+    }
+    body.push(field('API Key', input('password', a.apiKey, v => {
+      a.apiKey = v.trim();
+      /* 用户改成真 key 时顺手清掉占位标记 */
+      if (a.apiKey.length > 10 && !/替换/.test(a.apiKey)) S.save();
+    }, 'sk-...'))),
+    body.push(U.el('p', {
+      class: 'hint',
+      style: {
+        fontSize: '11.5px', margin: '-6px 0 14px', lineHeight: '1.6',
+        color: apiKeyFilled ? 'var(--text-faint)' : 'var(--warn)'
+      },
+      text: apiKeyFilled
+        ? '已填写。Key 只存在手机本地，不会上传。'
+        : '⚠️ 现在填的是代填值（sk-替换成你的百炼APIKey），AI 功能会报错。'
+          + '去 https://bailian.console.aliyun.com/?apiKey=1 申请一个真 key 替换掉。'
+    }))
     body.push(field('模型名', (() => {
       const preset = AI.PRESETS[a.provider];
       if (preset && preset.models && preset.models.length) {
