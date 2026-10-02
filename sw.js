@@ -4,7 +4,7 @@
    目的：装到桌面后断网也能完整使用；数据本身在 localStorage。
    ═══════════════════════════════════════════════ */
 
-const VERSION = 'lifehub-v1';
+const VERSION = 'lifehub-v6';
 const SHELL = [
   './',
   './index.html',
@@ -20,12 +20,15 @@ const SHELL = [
   './js/wechat.js',
   './js/charts.js',
   './js/blueprint.js',
+  './js/history.js',
   './js/views/today.js',
   './js/views/plan.js',
   './js/views/importv.js',
   './js/views/body.js',
   './js/views/money.js',
+  './js/views/history.js',
   './js/views/learn.js',
+  './js/views/help.js',
   './js/app.js',
   './icons/icon.svg'
 ];

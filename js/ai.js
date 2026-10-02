@@ -444,5 +444,276 @@
     }).filter(c => c.name && c.name !== '未命名课程');
   };
 
+  /* ═══════════ 食物识别与营养查询 ═══════════
+     内置食物库只有一百来条，学生日常吃的东西远不止这些。
+     概念不匹配、地方菜、外卖、零食、饮料基本都不在库里，
+     原来只能退化成「150 kcal/100g」的通用估算——误差能到两三倍。
+     所以这里接 AI 补两条路：
+       ① 纯文本查任意食物（不限于库）
+       ② 拍照片识别盘子里有什么、各多少克
+     ═══════════════════════════════════════════ */
+
+  /* 统一要求 AI 返回「每 100g」的营养值 + 一个常见份量。
+     统一成每 100g 是关键：这样跟本地库同构，
+     后续换算法、换份量都不用动渲染代码。 */
+  const FOOD_TEXT_PROMPT = [
+    '你是中国食物成分表。用户会给你一个食物名称，可能是：',
+    '家常菜、地方小吃、外卖菜品、餐厅菜、包装食品、饮料、零食，',
+    '或者带品牌/规格的描述（如「蜜雪冰城柠檬水」「卫龙辣条大包装」）。',
+    '',
+    '请给出该食物每 100g 的营养成分，以及一个最常见的食用份量。',
+    '如果名称里含份量信息（如「大杯」「两份」），按描述调整 gram。',
+    '如果是液体，unit 用「杯」或「瓶」；如果是主食，用「碗」或「个」。',
+    '',
+    '要求：',
+    '- 数值为该食物【每 100g】的含量，不是每份',
+    '- kcal 单位千卡，protein/fat/carb/fiber 单位克',
+    '- gram 是「一份」大概多少克（整数）',
+    '- 拿不准时按同类食物的常见值给，不要留空、不要给 null',
+    '- 给 1~4 个最可能匹配的候选，最可能的排第一',
+    '',
+    '只输出 JSON：',
+    '{"foods":[{"name":"名称","kcal":116,"protein":2.6,"fat":0.3,',
+    '"carb":25.9,"fiber":0.3,"unit":"碗","gram":200,"note":"一句话说明"}]}'
+  ].join('\n');
+
+  const FOOD_PHOTO_PROMPT = [
+    '你是营养师，正在看一张食物照片。请识别照片里所有能吃的东西，并估算份量。',
+    '',
+    '要求：',
+    '- 逐个列出食物，包括主食、菜、饮品、调料（油多的菜要单独说明）',
+    '- grams 是你估计的【实际摄入重量】，不是包装规格',
+    '- 同时给出该食物【每 100g】的营养值',
+    '- 照片里看不清或判断不了的，宁可少列也不要编',
+    '- 如果是包装食品，尽量说出品牌/口味',
+    '- 参考常见餐盘、筷子、手的比例来估算重量',
+    '',
+    '只输出 JSON：',
+    '{"items":[{"name":"米饭","grams":200,"kcal":116,"protein":2.6,"fat":0.3,',
+    '"carb":25.9,"fiber":0.3,"confidence":"high"}],',
+    '"note":"整体说明，比如这餐偏油、蛋白不足"}'
+  ].join('\n');
+
+  /** 从 AI 返回里抠出 JSON（容忍 ```json 包裹和前后废话）。
+   *  注意要同时认数组：AI 常直接返回 [{...}]，
+   *  如果只按 { 到 } 去找，会把数组里的第一个对象抠出来当整份结果。 */
+  function parseJsonObject(raw) {
+    let s = String(raw == null ? '' : raw).trim();
+    const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (fence) s = fence[1].trim();
+
+    const curly = s.indexOf('{'), bracket = s.indexOf('[');
+    let a, b;
+    if (bracket >= 0 && (curly < 0 || bracket < curly)) {
+      a = bracket; b = s.lastIndexOf(']');            // 数组优先
+    } else {
+      a = curly; b = s.lastIndexOf('}');
+    }
+    if (a >= 0 && b > a) s = s.slice(a, b + 1);
+
+    try {
+      const v = JSON.parse(s);
+      return v;
+    } catch (e) {
+      /* 上面挑错了括号就换另一种再试一次 */
+      const a2 = curly, b2 = s.lastIndexOf('}');
+      if (a2 >= 0 && b2 > a2) {
+        try { return JSON.parse(s.slice(a2, b2 + 1)); } catch (e2) { /* 落到下面报错 */ }
+      }
+      throw new Error('AI 返回的不是合法 JSON：' + String(raw).slice(0, 150));
+    }
+  }
+
+  /** 把 AI 返回的食物对象规整成内部结构（每 100g） */
+  function normFood(o) {
+    if (!o || !o.name) return null;
+    const num = v => {
+      const n = Number(v);
+      return isFinite(n) && n >= 0 ? n : 0;
+    };
+    const gram = num(o.gram) || num(o.grams) || 100;
+    return {
+      n: String(o.name).trim().slice(0, 40),
+      k: num(o.kcal),
+      p: num(o.protein),
+      f: num(o.fat),
+      c: num(o.carb),
+      fib: num(o.fiber),
+      unit: String(o.unit || '份').slice(0, 6),
+      gram: Math.round(gram),
+      tag: 'AI',
+      ai: true,
+      note: o.note ? String(o.note).slice(0, 80) : '',
+      confidence: o.confidence ? String(o.confidence).slice(0, 10) : ''
+    };
+  }
+
+  /**
+   * 用 AI 查食物的营养（不限于内置库）
+   * @param {string} query 食物名，越具体越准
+   * @returns {Promise<Array>} 内部食物结构数组
+   */
+  A.lookupFood = async function (query) {
+    if (!A.isReady()) throw new Error('还没配置 API Key（设置 → AI）');
+    const q = String(query || '').trim();
+    if (!q) throw new Error('先输入食物名');
+    if (q.length > 60) throw new Error('食物名太长了');
+
+    const out = await A.chat([
+      { role: 'system', content: '你是一个精确的中国食物营养数据库，只输出 JSON。' },
+      { role: 'user', content: FOOD_TEXT_PROMPT + '\n\n食物名称：' + q }
+    ], { temperature: 0.1, json: true, timeoutMs: 60000 });
+
+    const obj = parseJsonObject(out);
+    const arr = Array.isArray(obj) ? obj : (obj.foods || obj.items || []);
+    const foods = (Array.isArray(arr) ? arr : []).map(normFood).filter(Boolean);
+    if (!foods.length) throw new Error('没查到「' + q + '」的营养数据');
+
+    A.log('food-text', q, out);
+    return foods;
+  };
+
+  /**
+   * 拍照识别食物
+   * @param {string} dataUrl data:image/...;base64,...
+   * @returns {Promise<{items:Array, note:string}>}
+   */
+  A.readFoodPhoto = async function (dataUrl) {
+    if (!A.isReady()) throw new Error('还没配置 API Key（设置 → AI）');
+    if (!dataUrl || !/^data:image\//.test(dataUrl)) throw new Error('图片格式不对');
+
+    const out = await A.chat([
+      { role: 'system', content: '你是营养师，只输出 JSON。' },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: FOOD_PHOTO_PROMPT },
+          { type: 'image_url', image_url: { url: dataUrl } }
+        ]
+      }
+    ], {
+      model: A.visionModel(),
+      temperature: 0.2,
+      json: true,
+      timeoutMs: 120000
+    });
+
+    const obj = parseJsonObject(out);
+    const arr = Array.isArray(obj) ? obj : (obj.items || obj.foods || []);
+    const items = (Array.isArray(arr) ? arr : []).map(o => {
+      const f = normFood(o);
+      if (!f) return null;
+      /* 照片识别额外给「这盘大概多少克」，覆盖掉默认份量 */
+      const g = Number(o.grams);
+      f.photoGrams = isFinite(g) && g > 0 ? Math.round(g) : f.gram;
+      return f;
+    }).filter(Boolean);
+
+    if (!items.length) throw new Error('没从照片里认出食物，换个角度或拍清楚点再试');
+
+    A.log('food-photo', '(图片)', out, A.visionModel());
+    return { items, note: obj.note ? String(obj.note).slice(0, 200) : '' };
+  };
+
+  /* ═══════════ 账单截图识别 ═══════════
+     微信不允许第三方读它的数据库，导 CSV 要走
+     「钱包→账单→常见问题→下载账单→填邮箱→解压→粘贴」七八步。
+     截个图让 AI 读，能省掉中间的全部。
+     局限：账单页分页加载，一屏 8~10 条，要截几次。
+     ═══════════════════════════════════════ */
+
+  const BILL_PHOTO_PROMPT = [
+    '你在读一张微信支付或支付宝的账单截图。请把所有能看清的交易记录抽出来。',
+    '',
+    '规则：',
+    '- 只抽确实看得见的记录，看不清的不要猜',
+    '- 收入（+、已收钱、收款、退款）填 type:"income"；支出填 type:"expense"',
+    '- amount 只填数字，不带符号和货币符号，永远是正数',
+    '- date 尽量补成 YYYY-MM-DD；图上只写「10月2日」就看截图里的年份，没有就用今年',
+    '- time 填 HH:MM，看不清填空字符串',
+    '- counterparty 是对方姓名或商户名；product 是商品/说明',
+    '- category 从这些里选一个：餐饮、交通、购物、日用、学习、娱乐、医疗、住房、通讯、人情、数码、运动、其他',
+    '- 账单页的分页栏、广告、按钮文字不要当记录',
+    '',
+    '只输出 JSON：',
+    '{"txns":[{"date":"2026-10-02","time":"12:30","type":"expense","amount":32.00,'
+    + '"counterparty":"美团外卖","product":"午餐","category":"餐饮","status":"支付成功",'
+    + '"note":""}],"note":"比如：只认出了 5 条，最后一条金额被截断"}'
+  ].join('\n');
+
+  /**
+   * 识别账单截图 → 流水数组
+   * @param {string} dataUrl data:image/...;base64,...
+   * @returns {Promise<{txns:Array, note:string, skipped:number}>}
+   */
+  A.readBillPhoto = async function (dataUrl) {
+    if (!A.isReady()) throw new Error('还没配置 API Key（设置 → AI）');
+    if (!dataUrl || !/^data:image\//.test(dataUrl)) throw new Error('图片格式不对');
+
+    const out = await A.chat([
+      { role: 'system', content: '你是账单 OCR 助手，只输出 JSON。' },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: BILL_PHOTO_PROMPT },
+          { type: 'image_url', image_url: { url: dataUrl } }
+        ]
+      }
+    ], {
+      model: A.visionModel(),
+      temperature: 0.1,
+      json: true,
+      timeoutMs: 120000
+    });
+
+    const obj = parseJsonObject(out);
+    const arr = Array.isArray(obj) ? obj : (obj.txns || obj.items || []);
+
+    const VALID_CATS = ['餐饮', '交通', '购物', '日用', '学习', '娱乐', '医疗',
+      '住房', '通讯', '人情', '数码', '运动', '其他'];
+
+    let skipped = 0;
+    const txns = [];
+    (Array.isArray(arr) ? arr : []).forEach(o => {
+      if (!o) { skipped++; return; }
+      const amt = Number(String(o.amount == null ? '' : o.amount).replace(/[^\d.\-]/g, ''));
+      const date = String(o.date || '').trim();
+      if (!isFinite(amt) || !amt || !/^\d{4}-\d{2}-\d{2}$/.test(date)) { skipped++; return; }
+
+      let type = String(o.type || '').toLowerCase();
+      if (type !== 'income' && type !== 'expense') {
+        /* 从状态词猜方向 */
+        const st = String(o.status || '');
+        type = /已收钱|已到账|收款|退款|收入/.test(st) ? 'income' : 'expense';
+      }
+      let cat = String(o.category || '').trim();
+      if (VALID_CATS.indexOf(cat) < 0) cat = '其他';
+
+      txns.push({
+        id: '', date,
+        time: /^\d{1,2}:\d{2}$/.test(String(o.time || '').trim()) ? String(o.time).trim() : '',
+        type, amount: Math.abs(amt),
+        counterparty: String(o.counterparty || '').slice(0, 40),
+        product: String(o.product || '').slice(0, 60),
+        bizType: '', method: '',
+        status: String(o.status || '').slice(0, 20),
+        tradeNo: '', merchantNo: '',
+        note: String(o.note || '').slice(0, 80),
+        category: cat,
+        raw: JSON.stringify(o).slice(0, 300),
+        source: 'bill-photo'
+      });
+    });
+
+    if (!txns.length) throw new Error('没从截图里认出交易记录，换个清晰的截图再试');
+
+    A.log('bill-photo', '(图片)', out, A.visionModel());
+    return {
+      txns,
+      skipped,
+      note: obj.note ? String(obj.note).slice(0, 200) : ''
+    };
+  };
+
   global.AI = A;
 })(window);

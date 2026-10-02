@@ -135,6 +135,20 @@
     bodyBits.push(['蛋白', totals.p ? U.round(totals.p, 1) + ' g' : '未记录', bodySet.proteinTarget ? `目标 ${bodySet.proteinTarget}g` : '']);
     bodyBits.push(['睡眠', sleepRec && sleepRec.hours != null ? sleepRec.hours + ' 小时' : '未记录', bodySet.sleepTarget ? `目标 ${bodySet.sleepTarget}h` : '']);
 
+    /* 有几餐标了「没吃」就提示一句——这是要干预的事实，
+       跟「忘了记」不一样，不能安静地待在饮食页里。 */
+    if (totals.skipped) {
+      quick.appendChild(U.el('div', {
+        style: {
+          fontSize: '12px', color: 'var(--warn, #f59e0b)',
+          background: 'rgba(245,158,11,.10)', padding: '7px 10px',
+          borderRadius: '8px', marginBottom: '11px', lineHeight: '1.6'
+        },
+        text: `今天有 ${totals.skipped} 餐标了「没吃」。偶尔一次没关系，`
+            + `但连着几天这样会掉肌肉、也容易晚上暴食。`
+      }));
+    }
+
     quick.appendChild(U.el('div', { class: 'stat-grid' }, bodyBits.map(([l, v, s]) =>
       App.stat(l, v, '', s)
     )));
@@ -159,7 +173,9 @@
       ]),
       App.barRow('支出', ms.expense, Math.max(ms.income, ms.expense, 1), 'var(--danger)', U.money(ms.expense)),
       U.el('div', { style: { fontSize: '12px', color: 'var(--text-dim)', marginTop: '-4px' } },
-        [`收入基准 ${U.money(ms.income)}${S.settings.money.monthlyIncome != null ? '（自定义）' : '（账单统计）'}`])
+        [`本月收入 ${U.money(ms.income)}`
+         + (ms.stipend ? `（生活费 ${U.money(ms.stipend)}` + (ms.extra ? ` + 额外 ${U.money(ms.extra)}）` : '）') : '')
+         + ` · ${ms.incomeWindow.start.slice(5)} ~ ${ms.incomeWindow.end.slice(5)}`])
     ]));
   };
 

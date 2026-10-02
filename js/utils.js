@@ -229,6 +229,34 @@
     r.readAsText(file, 'utf-8');
   });
 
+  /** 读成 data:image/...;base64,... —— 给多模态识别用。
+   *  顺手压一下：手机照片动辄 4~8MB，直接传又慢又贵，
+   *  缩到长边 1280 对识别食物完全够，体感快很多。
+   *  压缩失败就退回原图，不能因为优化把功能弄坏。 */
+  U.readFileAsDataURL = (file, maxSide = 1280) => new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => {
+      const dataUrl = r.result;
+      if (!/^data:image\//.test(dataUrl) || !maxSide) return res(dataUrl);
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+          if (scale >= 1) return res(dataUrl);          // 本来就小，不动
+          const cv = document.createElement('canvas');
+          cv.width = Math.round(img.width * scale);
+          cv.height = Math.round(img.height * scale);
+          cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+          res(cv.toDataURL('image/jpeg', 0.85));
+        } catch (e) { res(dataUrl); }
+      };
+      img.onerror = () => res(dataUrl);
+      img.src = dataUrl;
+    };
+    r.onerror = () => rej(r.error);
+    r.readAsDataURL(file);
+  });
+
   /* ───────── 其它 ───────── */
 
   U.debounce = (fn, ms = 300) => {

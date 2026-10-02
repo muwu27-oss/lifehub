@@ -71,7 +71,21 @@
         monthlyIncome: null,
         monthlyBudget: null,
         currency: 'CNY',
-        savingGoal: null
+        savingGoal: null,
+
+        /* 固定生活费：每月定额打过来的那笔钱。
+           用户的情况是每月 1500、分两次各 750 到账，
+           所以「金额≈750 的收入」要认出来单独统计，
+           不能跟兼职/红包之类的额外收入混在一起。
+           见 DEVLOG.md：750 是这个用户的敏感数字。 */
+        stipendAmount: 750,        // 单笔固定生活费金额
+        stipendTolerance: 0.5,     // 容差（元）：防浮点/手续费误差。0.5 能兜住 749.5/750.5，又不会把 749/751 误吞
+        stipendTwice: true,        // 是否分两次到账（影响「收齐了吗」的提示）
+
+        /* 收入窗口错位：生活费常在上月底提前到账，
+           所以「10 月的收入」= 9/30 ~ 10/30，而不是 10/1 ~ 10/31。
+           支出仍按自然月。 */
+        incomeWindowShift: true
       },
       /* 课程表：只作为「排期约束」使用（知道何时有课，避免把任务排到课上），
          不是要显示的日程内容。见 DEVLOG.md 第一节。 */
@@ -129,6 +143,7 @@
       weights: [],      // 体重记录
       txns: [],         // 账本流水
       txnRules: [],     // 账本分类规则
+      customFoods: [],  // AI 查过/识别过的食物（补内置库的不足）
       aiLogs: [],       // AI 评价历史
       settings: defaultSettings(),
       meta: { created: new Date().toISOString(), lastImport: null }
@@ -150,7 +165,7 @@
         const base = defaultDB();
         db = Object.assign(base, parsed);
         db.settings = deepMerge(defaultSettings(), parsed.settings || {});
-        ['tasks', 'reviews', 'meals', 'sleep', 'weights', 'txns', 'txnRules', 'aiLogs'].forEach(k => {
+        ['tasks', 'reviews', 'meals', 'sleep', 'weights', 'txns', 'txnRules', 'customFoods', 'aiLogs'].forEach(k => {
           if (!Array.isArray(db[k])) db[k] = [];
         });
       } else {
@@ -216,6 +231,12 @@
     find(coll, id) { return (db[coll] || []).find(x => x.id === id); },
 
     add(coll, item) {
+      /* 未注册的集合直接抛清楚的话。
+         踩过的坑：db[coll] 是 undefined 时 unshift 抛 TypeError，
+         被上层 try/catch 吞掉，表现成「数据莫名没存进去」。 */
+      if (!Array.isArray(db[coll])) {
+        throw new Error('未知集合「' + coll + '」，先在 defaultDB() 里注册');
+      }
       if (!item.id) item.id = U.uid(coll.slice(0, 2) + '_');
       item.createdAt = item.createdAt || new Date().toISOString();
       db[coll].unshift(item);
@@ -436,23 +457,196 @@
 
     /* ───── 饮食 ───── */
     mealsOn(dateStr) { return db.meals.filter(m => m.date === dateStr); },
+
+    /** 标记某一餐「没吃」。
+     *  为什么需要：以前「没吃早饭」和「忘了记早饭」在数据里长得一样，
+     *  都是没有记录，AI 只能猜。但这两件事结论完全相反——
+     *  真没吃要提醒补蛋白、别拖到中午暴食；忘了记只是数据缺失。
+     *  存成 { date, type, skipped: true, items: [] }，跟「没记录」区分开。 */
+    setMealSkipped(dateStr, type, skipped) {
+      const ex = db.meals.find(m => m.date === dateStr && m.type === type && m.skipped);
+      if (skipped) {
+        if (!ex) db.meals.push({ id: U.uid('me_'), date: dateStr, type, skipped: true, items: [], time: '' });
+      } else if (ex) {
+        db.meals = db.meals.filter(m => m !== ex);
+      }
+      save();
+      return true;
+    },
+
+    /** 这一餐的状态：'eaten' 有记录 | 'skipped' 明确没吃 | 'none' 没记录 */
+    mealStatus(dateStr, type) {
+      const list = db.meals.filter(m => m.date === dateStr && m.type === type);
+      if (list.some(m => m.skipped)) return 'skipped';
+      if (list.length) return 'eaten';
+      return 'none';
+    },
+
     sleepOn(dateStr) { return db.sleep.find(s => s.date === dateStr) || null; },
     weightLatest() { return db.weights.length ? db.weights[db.weights.length - 1] : null; },
 
     /* ───── 账本 ───── */
     txnsInMonth(ym) { return db.txns.filter(t => (t.date || '').slice(0, 7) === ym); },
 
+    /** 账本里出现过的所有「用途」标签（去重、按出现次数排）。
+     *  用途是自由文本（如「这个月房租」「给妹妹生活费」），
+     *  但给用户一个历史列表选，比每次手打强。 */
+    txnPurposes() {
+      const map = {};
+      db.txns.forEach(t => {
+        const p = (t.purpose || '').trim();
+        if (p) map[p] = (map[p] || 0) + 1;
+      });
+      return Object.keys(map).sort((a, b) => map[b] - map[a] || a.localeCompare(b));
+    },
+
+    /** 账本里出现过的所有分类（含自定义的）。 */
+    txnCategories() {
+      /* 踩过的坑：WeChat.CATEGORIES 是数组不是对象，
+         用 Object.keys() 会得到 ["0","1","2"...] 这种下标。
+         这里兼容两种形态。 */
+      const src = (typeof WeChat !== 'undefined' && WeChat.CATEGORIES) || [];
+      const base = Array.isArray(src) ? src.slice() : Object.keys(src);
+      const set = {};
+      base.forEach(c => { if (c) set[c] = 1; });
+      db.txns.forEach(t => { if (t.category) set[t.category] = 1; });
+      db.txnRules.forEach(r => { if (r.category) set[r.category] = 1; });
+      return Object.keys(set);
+    },
+
+    /**
+     * 学会一条规则：根据一笔已编辑的交易，生成/更新对应的 txnRules 条目。
+     *
+     * 去重键是「关键词 + 流向」——同一个人两个方向算两条规则，
+     * 这正是用户要的：「张三给我转账是生活费，我给李四转账是其他消费」。
+     * 已存在就更新分类和用途（用户改主意了），不新增。
+     *
+     * @returns {{rule:object, created:boolean}|null}
+     */
+    learnRuleFromTxn(txn) {
+      if (!txn || typeof WeChat === 'undefined' || !WeChat.ruleFromTxn) return null;
+      const draft = WeChat.ruleFromTxn(txn);
+      if (!draft) return null;
+
+      const k = U.norm(draft.keyword).toLowerCase();
+      const ex = db.txnRules.find(r =>
+        U.norm(String(r.keyword || '')).toLowerCase() === k &&
+        (r.direction || 'both') === (draft.direction || 'both')
+      );
+      if (ex) {
+        ex.category = draft.category || ex.category;
+        if (draft.purpose) ex.purpose = draft.purpose;
+        ex.hits = (ex.hits || 0) + 1;
+        save();
+        return { rule: ex, created: false };
+      }
+      const rule = Object.assign({ id: U.uid('ru_'), hits: 1 }, draft);
+      db.txnRules.push(rule);
+      save();
+      return { rule, created: true };
+    },
+
+    /** 把一条规则应用到已有的历史流水上（用于「回填」按钮）。 */
+    applyRuleToHistory(rule) {
+      if (!rule || !rule.keyword) return 0;
+      let n = 0;
+      db.txns.forEach(t => {
+        /* 只回填还没被人工确认过的，避免覆盖用户手动改过的分类 */
+        if (t.edited) return;
+        if (rule.direction && rule.direction !== 'both' && rule.direction !== t.type) return;
+        const hay = U.norm([t.counterparty, t.product, t.note].filter(Boolean).join(' ')).toLowerCase();
+        if (hay.indexOf(U.norm(rule.keyword).toLowerCase()) < 0) return;
+        if (rule.category) { t.category = rule.category; n++; }
+        if (rule.purpose) t.purpose = rule.purpose;
+      });
+      if (n) save();
+      return n;
+    },
+
     monthSummary(ym) {
       const list = S.txnsInMonth(ym);
-      const income = U.sum(list.filter(t => t.type === 'income'), t => t.amount);
       const expense = U.sum(list.filter(t => t.type === 'expense'), t => t.amount);
-      const income2 = S.settings.money.monthlyIncome;
-      const base = (income2 != null && income2 !== '') ? Number(income2) : income;
+      const inc = S.monthIncome(ym);
+
       return {
-        income: base, realIncome: income, expense,
-        balance: base - expense,
+        /* income 现在是「账单里的真实收入」，不再被设置值覆盖。
+           设置值降级成参考（referenceIncome），见 DEVLOG。 */
+        income: inc.total,
+        realIncome: inc.total,
+        expense,
+        balance: inc.total - expense,
         count: list.length,
-        savingGoal: S.settings.money.savingGoal
+        savingGoal: S.settings.money.savingGoal,
+
+        /* 收入拆分 */
+        stipend: inc.stipend,          // 固定生活费合计
+        extra: inc.extra,              // 额外收入合计
+        stipendCount: inc.stipendCount,
+        extraCount: inc.extraCount,
+        referenceIncome: inc.reference,
+        incomeWindow: inc.window
+      };
+    },
+
+    /** 某个月的收入窗口 [start, end]（含两端）。
+     *  默认错位：上个月最后一天 ~ 本月倒数第二天。
+     *  理由：生活费常在上月底提前打进来，那笔其实属于下个月。 */
+    incomeWindow(ym) {
+      const shift = S.settings.money.incomeWindowShift !== false;
+      const [y, m] = String(ym).split('-').map(Number);
+      if (!shift) {
+        const last = new Date(y, m, 0).getDate();
+        return { start: `${ym}-01`, end: `${ym}-${U.pad(last)}`, shifted: false };
+      }
+      /* 上个月最后一天 */
+      const prevLast = new Date(y, m - 1, 0);
+      const startStr = U.ymd(prevLast);
+      /* 本月倒数第二天 */
+      const lastDay = new Date(y, m, 0).getDate();
+      return { start: startStr, end: `${ym}-${U.pad(lastDay - 1)}`, shifted: true };
+    },
+
+    /** 这笔金额算不算「固定生活费」。
+     *  用户设定：每月 1500 分两次各 750 到账，所以 750 是敏感数字。
+     *  带容差是因为微信导出的金额偶尔有几分钱浮动 / 手续费。
+     *  纯读函数，不改数据——统计和界面都用它，保证口径一致。 */
+    isStipendAmount(amt) {
+      const tol = Number(S.settings.money.stipendTolerance);
+      const target = Number(S.settings.money.stipendAmount);
+      const useTol = isFinite(tol) && tol >= 0 ? tol : 1;
+      if (!isFinite(target) || target <= 0) return false;
+      return Math.abs((Number(amt) || 0) - target) <= useTol;
+    },
+
+    /** 某个月的收入统计（含固定生活费 / 额外收入的拆分）。 */
+    monthIncome(ym) {
+      const win = S.incomeWindow(ym);
+      const all = db.txns.filter(t => t.type === 'income');
+      const inWin = all.filter(t => {
+        const d = (t.date || '').slice(0, 10);
+        return d && d >= win.start && d <= win.end;
+      });
+
+      let stipend = 0, extra = 0, stipendCount = 0, extraCount = 0;
+      inWin.forEach(t => {
+        const amt = Number(t.amount) || 0;
+        if (S.isStipendAmount(amt)) {
+          stipend += amt; stipendCount++;
+        } else {
+          extra += amt; extraCount++;
+        }
+      });
+
+      const ref = S.settings.money.monthlyIncome;
+      return {
+        total: U.round(stipend + extra, 2),
+        stipend: U.round(stipend, 2),
+        extra: U.round(extra, 2),
+        stipendCount, extraCount,
+        reference: (ref != null && ref !== '') ? Number(ref) : null,
+        window: win,
+        /* 供界面提示：生活费收齐了吗 */
+        expected: (ref != null && ref !== '') ? Number(ref) : null
       };
     },
 

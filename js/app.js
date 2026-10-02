@@ -12,7 +12,9 @@
     import: { title: '一键导入', sub: () => '粘贴文本，自动归档',                                    render: () => Views.importv() },
     body:   { title: '饮食作息', sub: () => '记录与健康评估',                                        render: () => Views.body() },
     money:  { title: '账本',     sub: () => '收支统计与储蓄',                                        render: () => Views.money() },
-    learn:  { title: '学习蓝图', sub: () => '计算机视觉 · 具身智能',                                  render: () => Views.learn() }
+    history: { title: '回顾',    sub: () => '周 / 月 / 年 · 历史与健康趋势',                          render: () => Views.history() },
+    learn:  { title: '学习蓝图', sub: () => '计算机视觉 · 具身智能',                                  render: () => Views.learn() },
+    help:   { title: '操作手册', sub: () => '怎么用 · 常见问题',                                      render: () => Views.help() }
   };
 
   App.current = 'today';
@@ -264,7 +266,14 @@
     /* 财务 */
     body.push(U.el('div', { class: 'section-label', text: '财务' }));
     const m = st.money;
-    body.push(field('每月收入 (元)', input('number', m.monthlyIncome, v => { m.monthlyIncome = v === '' ? null : Number(v); }, '3000')));
+    body.push(field('每月生活费总额 (元)', input('number', m.monthlyIncome, v => { m.monthlyIncome = v === '' ? null : Number(v); }, '1500'),
+      '家里每月给的定额。只用来提示「收齐了吗」，不算进总收入'));
+    body.push(field('单笔固定生活费 (元)', input('number', m.stipendAmount, v => { m.stipendAmount = v === '' ? null : Number(v); }, '750'),
+      '金额等于这个数的收入算固定生活费（比如 1500 分两次各 750）'));
+    body.push(field('金额容差 (元)', input('number', m.stipendTolerance, v => { m.stipendTolerance = v === '' ? 0.5 : Number(v); }, '0.5', '0.1'),
+      '防止手续费或浮点误差导致认不出来'));
+    body.push(field('收入按错位窗口统计', checkbox(m.incomeWindowShift !== false, v => { m.incomeWindowShift = v; }),
+      '开启后 10 月收入 = 9/30 ~ 10/30（生活费常在上月底提前到账）。支出始终按自然月'));
     body.push(field('每月预算 (元)', input('number', m.monthlyBudget, v => { m.monthlyBudget = v === '' ? null : Number(v); }, '2500')));
     body.push(field('每月储蓄目标 (元)', input('number', m.savingGoal, v => { m.savingGoal = v === '' ? null : Number(v); }, '500')));
 
@@ -396,6 +405,19 @@
             '提醒通过导出 .ics 到系统日历实现（小米/HyperOS 上最可靠）。'
     }));
 
+    /* 帮助与学习蓝图入口（这两个不在底部导航里，放这儿方便找） */
+    body.push(U.el('div', { class: 'section-label', text: '更多' }));
+    body.push(U.el('div', { class: 'row', style: { gap: '8px', marginBottom: '18px' } }, [
+      U.el('button', {
+        class: 'btn ghost grow', text: '📖 操作手册',
+        onclick: () => { App.closeSheet(); App.go('help'); }
+      }),
+      U.el('button', {
+        class: 'btn ghost grow', text: '🧭 学习蓝图',
+        onclick: () => { App.closeSheet(); App.go('learn'); }
+      })
+    ]));
+
     /* 保存 */
     const btnSave = U.el('button', {
       class: 'btn primary block', text: '保存设置',
@@ -430,6 +452,21 @@
     });
     if (step) el.setAttribute('step', step);
     return el;
+  }
+
+  /* 开关型字段：设置里「开/关某行为」的地方用这个，比 select 省事 */
+  function checkbox(checked, onChange) {
+    return U.el('label', {
+      class: 'row',
+      style: { gap: '10px', alignItems: 'center', cursor: 'pointer', padding: '2px 0' }
+    }, [
+      U.el('input', {
+        type: 'checkbox', checked: !!checked,
+        style: { width: '18px', height: '18px', accentColor: 'var(--accent)', flexShrink: '0' },
+        onchange: e => onChange(e.target.checked)
+      }),
+      U.el('span', { style: { fontSize: '13px' }, text: checked ? '已开启' : '已关闭' })
+    ]);
   }
 
   function selectEl(options, current, onChange) {
@@ -645,6 +682,7 @@
     U.$$('.tab').forEach(t => t.addEventListener('click', () => App.go(t.dataset.view)));
     U.$('#sheetClose').addEventListener('click', App.closeSheet);
     U.$('#scrim').addEventListener('click', App.closeSheet);
+    U.$('#btnHelp').addEventListener('click', () => App.go('help'));
     U.$('#btnSettings').addEventListener('click', App.openSettings);
     U.$('#btnAi').addEventListener('click', App.openAI);
 

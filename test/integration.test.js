@@ -95,7 +95,7 @@ try {
 }
 ok('今日视图已渲染', (window.document.querySelector('#view-today').innerHTML || '').length > 100,
   '长度 ' + window.document.querySelector('#view-today').innerHTML.length);
-ok('底部导航有 5 个 tab', window.document.querySelectorAll('.tab').length === 5);
+ok('底部导航有 6 个 tab', window.document.querySelectorAll('.tab').length === 6);
 
 /* ⚠ 关键回归：App.go() 必须给当前视图加 .active
    否则 CSS 的 .view{display:none} 会把整页藏掉 —— 真机上打开就是白屏。

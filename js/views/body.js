@@ -118,18 +118,54 @@
 
     types.forEach(ty => {
       const list = meals.filter(m => m.type === ty.id);
+      const status = S.mealStatus(st.date, ty.id);          // eaten | skipped | none
+      const eaten = list.filter(m => !m.skipped);
       const card = U.el('div', { class: 'card tight' });
 
-      const sub = list.reduce((s, m) => s + Nutrition.dayTotals([m]).kcal, 0);
-      card.appendChild(U.el('div', { class: 'card-head', style: { marginBottom: list.length ? '10px' : '0' } }, [
+      const sub = eaten.reduce((s, m) => s + Nutrition.dayTotals([m]).kcal, 0);
+      card.appendChild(U.el('div', {
+        class: 'card-head',
+        style: { marginBottom: (eaten.length || status === 'skipped') ? '10px' : '0' }
+      }, [
         U.el('h3', { text: ty.icon + ' ' + ty.name }),
         U.el('span', {
           class: 'hint',
-          text: list.length ? `${Math.round(sub)} kcal` : '未记录'
+          style: status === 'skipped' ? { color: 'var(--warn, #f59e0b)' } : {},
+          text: status === 'skipped' ? '没吃'
+              : eaten.length ? `${Math.round(sub)} kcal`
+              : '未记录'
         })
       ]));
 
-      list.forEach(m => {
+      /* 明确「没吃」的餐：显示成一条可撤销的记录，而不是空白 */
+      if (status === 'skipped') {
+        const row = U.el('div', {
+          style: {
+            display: 'flex', alignItems: 'center', gap: '8px',
+            padding: '9px 0', borderBottom: '1px solid var(--border)'
+          }
+        }, [
+          U.el('span', { style: { fontSize: '15px' }, text: '🚫' }),
+          U.el('div', { class: 'grow' }, [
+            U.el('div', { style: { fontSize: '13.5px', fontWeight: '500' }, text: '这餐没吃' }),
+            U.el('div', {
+              style: { fontSize: '11px', color: 'var(--text-faint)', marginTop: '2px' },
+              text: 'AI 评价时会按「真没吃」处理'
+            })
+          ]),
+          U.el('button', {
+            class: 'btn ghost sm', text: '撤销',
+            onclick: e => {
+              e.stopPropagation();
+              S.setMealSkipped(st.date, ty.id, false);
+              App.refresh();
+            }
+          })
+        ]);
+        card.appendChild(row);
+      }
+
+      eaten.forEach(m => {
         const row = U.el('div', {
           style: { padding: '9px 0', borderBottom: '1px solid var(--border)' }
         });
@@ -146,11 +182,28 @@
         card.appendChild(row);
       });
 
-      card.appendChild(U.el('button', {
-        class: 'btn ghost sm block', style: { marginTop: '10px' },
-        text: '＋ 添加' + ty.name,
-        onclick: () => openMealEditor(null, ty.id)
-      }));
+      /* 两个按钮并排：加记录 / 标没吃。
+         「没吃」是常用操作，藏进编辑页里太深了。 */
+      card.appendChild(U.el('div', { class: 'row', style: { gap: '8px', marginTop: '10px' } }, [
+        U.el('button', {
+          class: 'btn ghost sm grow',
+          text: '＋ 添加' + ty.name,
+          onclick: () => openMealEditor(null, ty.id)
+        }),
+        status === 'skipped'
+          ? null
+          : U.el('button', {
+              class: 'btn ghost sm',
+              style: { flexShrink: '0', color: 'var(--text-dim)' },
+              text: '没吃',
+              title: '标记这餐没吃（区别于「忘了记」）',
+              onclick: () => {
+                S.setMealSkipped(st.date, ty.id, true);
+                App.refresh();
+                U.toast(ty.name + '已标记为「没吃」', 'ok');
+              }
+            })
+      ]));
       root.appendChild(card);
     });
   }
@@ -201,10 +254,125 @@
     }
 
     function addItem(food, grams) {
-      m.items.push({ name: food.n, grams: grams || food.gram, unit: food.unit });
+      /* AI 查到的食物带上每 100g 营养值一起存，
+         这样以后即使断网、换设备，这笔的热量也不会走「通用估算」。
+         同时记进本地库，下次能直接搜到。 */
+      const it = { name: food.n, grams: grams || food.photoGrams || food.gram, unit: food.unit };
+      if (food.ai && (food.k || food.p || food.c)) {
+        it.nut = { k: food.k, p: food.p, f: food.f, c: food.c, fib: food.fib };
+        it.ai = true;
+        if (food.note) it.note = food.note;
+        try { Nutrition.learn(food); } catch (e) { console.warn('记住食物失败', e); }
+      }
+      m.items.push(it);
       renderList();
       searchIn.value = '';
       resultBox.innerHTML = '';
+    }
+
+    /** 用 AI 查一个内置库没有的食物 */
+    function aiLookup(q) {
+      resultBox.innerHTML = '';
+      const loading = U.el('div', {
+        style: { fontSize: '12.5px', color: 'var(--text-dim)', padding: '8px 2px' },
+        text: `🤖 正在查「${q}」…`
+      });
+      resultBox.appendChild(loading);
+
+      AI.lookupFood(q).then(foods => {
+        resultBox.innerHTML = '';
+        foods.forEach((f, i) => {
+          resultBox.appendChild(U.el('button', {
+            class: 'btn ghost sm block',
+            style: { marginBottom: '5px', justifyContent: 'space-between', textAlign: 'left' },
+            onclick: () => addItem(f)
+          }, [
+            U.el('span', {}, [
+              U.el('span', { text: f.n }),
+              U.el('span', { style: { fontSize: '10px', color: 'var(--accent)', marginLeft: '5px' }, text: i === 0 ? 'AI' : '' })
+            ]),
+            U.el('span', { style: { fontSize: '11.5px', color: 'var(--text-dim)' },
+              text: `${Math.round(f.k)}kcal/100g · 1${f.unit}≈${f.gram}g` })
+          ]));
+          if (f.note) {
+            resultBox.appendChild(U.el('div', {
+              style: { fontSize: '11px', color: 'var(--text-faint)', margin: '-3px 0 7px 2px' }, text: f.note
+            }));
+          }
+        });
+        resultBox.appendChild(U.el('div', {
+          style: { fontSize: '10.5px', color: 'var(--text-faint)', marginTop: '4px' },
+          text: 'AI 估算，仅供参考；已自动记进你的食物库，下次不用再查'
+        }));
+      }).catch(e => {
+        resultBox.innerHTML = '';
+        resultBox.appendChild(U.el('div', {
+          style: { fontSize: '12px', color: 'var(--danger)', padding: '6px 2px' }, text: 'AI 查询失败：' + e.message
+        }));
+        /* AI 挂了也别把人卡住，给个手动估算的退路 */
+        resultBox.appendChild(U.el('button', {
+          class: 'btn ghost sm block',
+          text: `仍按通用估算添加「${q}」`,
+          onclick: () => addItem({ n: q, gram: 100, unit: '份' }, 100)
+        }));
+      });
+    }
+
+    /** 照片识别：拍一张 → AI 认出有哪些食物、各多少克 */
+    function photoRecognize() {
+      const inp = U.el('input', { type: 'file', accept: 'image/*', capture: 'environment' });
+      inp.addEventListener('change', async () => {
+        const f = inp.files && inp.files[0];
+        if (!f) return;
+        resultBox.innerHTML = '';
+        resultBox.appendChild(U.el('div', {
+          style: { fontSize: '12.5px', color: 'var(--text-dim)', padding: '8px 2px' },
+          text: '🤖 正在识别照片里的食物…（约 10~30 秒）'
+        }));
+        try {
+          const dataUrl = await U.readFileAsDataURL(f);
+          const r = await AI.readFoodPhoto(dataUrl);
+          resultBox.innerHTML = '';
+          (r.items || []).forEach(fd => {
+            resultBox.appendChild(U.el('button', {
+              class: 'btn ghost sm block',
+              style: { marginBottom: '5px', justifyContent: 'space-between', textAlign: 'left' },
+              onclick: () => addItem(fd)
+            }, [
+              U.el('span', {}, [
+                U.el('span', { text: fd.n }),
+                fd.confidence === 'low'
+                  ? U.el('span', { style: { fontSize: '10px', color: 'var(--warn,#f59e0b)', marginLeft: '5px' }, text: '不确定' })
+                  : null
+              ]),
+              U.el('span', { style: { fontSize: '11.5px', color: 'var(--text-dim)' },
+                text: `约 ${fd.photoGrams}g · ${Math.round(fd.k * fd.photoGrams / 100)}kcal` })
+            ]));
+          });
+          if (r.note) {
+            resultBox.appendChild(U.el('div', {
+              class: 'ai-out', style: { fontSize: '11.5px', marginTop: '6px' }, text: r.note
+            }));
+          }
+          if ((r.items || []).length > 1) {
+            resultBox.appendChild(U.el('button', {
+              class: 'btn primary sm block', style: { marginTop: '8px' },
+              text: `全部添加（${r.items.length} 项）`,
+              onclick: () => { r.items.forEach(fd => addItem(fd, fd.photoGrams)); }
+            }));
+          }
+          resultBox.appendChild(U.el('div', {
+            style: { fontSize: '10.5px', color: 'var(--text-faint)', marginTop: '4px' },
+            text: '点单项可单独调整；重量识别是估算，可以改'
+          }));
+        } catch (e) {
+          resultBox.innerHTML = '';
+          resultBox.appendChild(U.el('div', {
+            style: { fontSize: '12px', color: 'var(--danger)', padding: '6px 2px' }, text: '识别失败：' + e.message
+          }));
+        }
+      });
+      inp.click();
     }
 
     searchIn.addEventListener('input', () => {
@@ -212,31 +380,52 @@
       resultBox.innerHTML = '';
       if (!q) return;
       const found = Nutrition.search(q, 8);
-      if (!found.length) {
-        resultBox.appendChild(U.el('button', {
-          class: 'btn ghost sm block',
-          text: `找不到「${q}」，按通用估算添加`,
-          onclick: () => addItem({ n: q, gram: 100, unit: '份' }, 100)
-        }));
-        return;
-      }
+
       found.forEach(f => {
         resultBox.appendChild(U.el('button', {
           class: 'btn ghost sm block',
           style: { marginBottom: '5px', justifyContent: 'space-between', textAlign: 'left' },
           onclick: () => addItem(f)
         }, [
-          U.el('span', { text: f.n }),
+          U.el('span', {}, [
+            U.el('span', { text: f.n }),
+            f.ai ? U.el('span', { style: { fontSize: '10px', color: 'var(--accent)', marginLeft: '5px' }, text: '我的' }) : null
+          ]),
           U.el('span', { style: { fontSize: '11.5px', color: 'var(--text-dim)' },
             text: `${Math.round(f.k)}kcal/100g · 1${f.unit}≈${f.gram}g` })
         ]));
       });
+
+      /* 永远给一个「用 AI 查」的入口，不管本地库有没有命中。
+         因为「宫保鸡丁」可能命中「鸡丁」，但那个营养值差很远，
+         用户需要能强制走 AI 拿准确值。 */
+      resultBox.appendChild(U.el('button', {
+        class: 'btn ghost sm block',
+        style: { marginTop: found.length ? '4px' : '0', color: 'var(--accent)' },
+        text: `🤖 用 AI 查「${q}」的营养`,
+        onclick: () => aiLookup(q)
+      }));
+
+      if (!found.length) {
+        resultBox.appendChild(U.el('button', {
+          class: 'btn ghost sm block',
+          style: { marginTop: '4px' },
+          text: '按通用估算添加（不花 token）',
+          onclick: () => addItem({ n: q, gram: 100, unit: '份' }, 100)
+        }));
+      }
     });
 
     renderList();
 
     const box = U.el('div', {}, [
-      App.field('吃什么（搜索添加）', searchIn),
+      U.el('div', { class: 'row', style: { gap: '8px', marginBottom: '10px' } }, [
+        App.field('吃什么（搜索添加）', searchIn),
+        U.el('button', {
+          class: 'btn ghost', style: { flexShrink: '0', alignSelf: 'flex-end', height: '38px' },
+          text: '📷 拍照', onclick: photoRecognize
+        })
+      ]),
       resultBox,
       U.el('div', { style: { marginTop: '12px' } }, [listBox]),
       App.field('时间（可选）', App.input('time', m.time || '', v => { m.time = v; })),
@@ -443,5 +632,7 @@
   }
 
   Views.bodyState = st;
+  /* 暴露给截图/测试用 */
+  Views.mealEditor = openMealEditor;
   global.Views = Views;
 })(window);

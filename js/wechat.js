@@ -413,23 +413,57 @@
 
   /**
    * 规则匹配：把候选规则（用户自训练）先跑一遍。
+   *
+   * 规则可以只写关键词，也可以锁定「流向」和「分类」：
+   *   { keyword:'张三', direction:'income',  category:'生活费' }
+   *   { keyword:'李四', direction:'expense', category:'其他消费' }
+   * 同一个人既可能转钱给我、我也可能转给他，所以流向必须能区分，
+   * 否则一条规则会把两个方向的账都吃掉。
+   *
+   * 匹配优先级（分数越高越优先）：
+   *   流向锁定 +40，有分类 +10，关键词越长 +长度
+   * 这样「张三」和「张三 生活费」同时存在时，更具体的赢。
+   *
    * @param {object} txn
-   * @param {Array<{keyword:string, category:string}>} rules
-   * @returns {string|null}
+   * @param {Array} rules
+   * @returns {{category:string, rule:object, direction:string}|null}
    */
-  W.applyRules = function (txn, rules) {
+  W.matchRule = function (txn, rules) {
     if (!txn || !Array.isArray(rules) || !rules.length) return null;
     const hay = U.norm(
       [txn.counterparty, txn.product, txn.note].filter(Boolean).join(' ')
     ).toLowerCase();
     if (!hay) return null;
+
+    let best = null, bestScore = -1;
     for (let i = 0; i < rules.length; i++) {
       const r = rules[i];
-      if (!r || !r.keyword || !r.category) continue;
+      if (!r || !r.keyword) continue;
       const kw = U.norm(String(r.keyword)).toLowerCase().trim();
-      if (kw && hay.indexOf(kw) >= 0) return r.category;
+      if (!kw || hay.indexOf(kw) < 0) continue;
+
+      /* 规则锁定了流向就要求一致；没锁就两个方向都吃 */
+      if (r.direction && r.direction !== 'both' && r.direction !== txn.type) continue;
+
+      let score = kw.length;
+      if (r.direction && r.direction !== 'both') score += 40;
+      if (r.category) score += 10;
+
+      if (score > bestScore) {
+        bestScore = score;
+        best = { category: r.category || null, rule: r, direction: r.direction || 'both' };
+      }
     }
-    return null;
+    return best;
+  };
+
+  /**
+   * 兼容旧接口：只要分类名。
+   * @deprecated 新代码用 matchRule，能拿到命中的规则和流向。
+   */
+  W.applyRules = function (txn, rules) {
+    const m = W.matchRule(txn, rules);
+    return m ? m.category : null;
   };
 
   /**
@@ -471,6 +505,32 @@
    * @param {string} text 已解码为 UTF-8 的账单全文
    * @returns {{txns:Array, meta:object, warnings:string[]}}
    */
+  /** 给一笔流水定分类、套规则、生成稳定 id。
+   *  CSV 导入和 AI 识别都要走这里，否则两条路的分类口径会不一致。 */
+  W.finalizeTxn = function (txn) {
+    txn.category = txn.category || '其他';
+    txn.autoCategory = W.categorize(txn);
+
+    const hit = W.matchRule(txn, typeof S !== 'undefined' && S.all ? S.all('txnRules') : []);
+    /* 用户规则优先于内置词库，其次才用 AI 给的分类 */
+    if (hit && hit.category) txn.category = hit.category;
+    else if (!txn.category || txn.category === '其他') txn.category = txn.autoCategory;
+
+    if (hit) {
+      txn.ruleHit = hit.category || '';
+      txn.ruleId = hit.rule.id || '';
+      txn.ruleKeyword = hit.rule.keyword || '';
+    }
+
+    /* 稳定 id：优先单号，保证重复导入同一份文件 id 也一致 */
+    if (!txn.id) {
+      txn.id = 'wx_' + (txn.tradeNo
+        ? U.hash(txn.tradeNo)
+        : U.hash([txn.date, txn.time, txn.amount, txn.counterparty, txn.merchantNo].join('|')));
+    }
+    return txn;
+  };
+
   W.parseCSV = function (text) {
     const out = { txns: [], meta: {}, warnings: [] };
 
@@ -615,10 +675,16 @@
       };
 
       // 5) 分类：先用户规则，再内置词库
-      const byRule = W.applyRules(txn, typeof S !== 'undefined' && S.all ? S.all('txnRules') : []);
-      txn.category = byRule || W.categorize(txn);
+      const hit = W.matchRule(txn, typeof S !== 'undefined' && S.all ? S.all('txnRules') : []);
+      txn.category = (hit && hit.category) || W.categorize(txn);
       txn.autoCategory = W.categorize(txn);
-      if (byRule) txn.ruleHit = byRule;
+      /* 记下是哪条规则判的，方便在列表里告诉用户「这条为什么是生活费」，
+         也方便他点进去改——比对着「其他」发懵强。 */
+      if (hit) {
+        txn.ruleHit = hit.category || '';
+        txn.ruleId = hit.rule.id || '';
+        txn.ruleKeyword = hit.rule.keyword || '';
+      }
 
       // 6) 稳定 id：优先单号，保证重复导入同一份文件 id 也一致
       txn.id = 'wx_' + (txn.tradeNo
@@ -735,6 +801,29 @@
 
   /* ═══════════ 6. 规则建议（训练分类器） ═══════════ */
 
+  /**
+   * 从一笔已编辑的交易里学出一条规则。
+   *
+   * 用户改完一笔账，我们要记住「下次遇到类似的也这么分」。
+   * 关键词优先用「对方」（人/商户最稳定），没有才退回商品。
+   * 流向默认锁定成这笔的方向——因为他改的是这个方向的账，
+   * 另一个方向未必适用（张三转给我=生活费，我转给张三≠生活费）。
+   *
+   * @param {object} txn 已编辑好的交易
+   * @returns {object|null} 规则对象（未去重）
+   */
+  W.ruleFromTxn = function (txn) {
+    if (!txn) return null;
+    const kw = keywordOf(txn);
+    if (!kw) return null;
+    return {
+      keyword: kw,
+      direction: txn.type === 'income' ? 'income' : 'expense',
+      category: txn.category || '',
+      purpose: txn.purpose || ''
+    };
+  };
+
   /** 归一化关键词：去掉单号、纯数字、金额等噪声 */
   function keywordOf(t) {
     const cand = [t.counterparty, t.product, t.note];
@@ -759,7 +848,9 @@
    */
   W.suggestRules = function (txns) {
     const list = Array.isArray(txns) ? txns.filter(Boolean) : [];
-    const others = list.filter(t => (t.category || '其他') === '其他' && t.type === 'expense');
+    /* 收入也要建议——「某人转给我的是生活费」正是用户要的场景，
+       原来只筛 expense，收入永远进不了建议列表。 */
+    const others = list.filter(t => (t.category || '其他') === '其他');
     if (!others.length) return [];
 
     // 已存在的规则不再重复建议
@@ -774,7 +865,7 @@
       if (!kw) return;
       const k = U.norm(kw).toLowerCase();
       if (have[k]) return;
-      if (!map[k]) map[k] = { keyword: kw, category: '其他', count: 0, sample: t };
+      if (!map[k]) map[k] = { keyword: kw, category: '其他', count: 0, sample: t, type: t.type };
       map[k].count++;
     });
 
@@ -839,6 +930,275 @@
     const dd = W.dedupe(existing || [], parsed.txns);
     return {
       meta: parsed.meta,
+      warnings: parsed.warnings,
+      fresh: dd.fresh,
+      dupes: dd.dupes,
+      summary: W.summary(dd.fresh)
+    };
+  };
+
+  /* ═══════════ 账单页「复制文字」解析 ═══════════
+     微信/支付宝账单页可以直接长按全选复制，拿到的是这种文本：
+
+       ```
+       2026年10月1日 10:00
+       转账-来自张三
+       +2000.00
+       已收钱
+
+       10月2日 12:30
+       美团外卖
+       -32.00
+       支付成功
+       ```
+
+     比导 CSV 少 5 步（不用邮箱、不用解压、不用电脑）。
+     局限：账单页是分页加载的，只能复制到当前屏附近的内容。
+     ═══════════════════════════════════════════ */
+
+  /* 金额：带正负号或「收入/支出」标记。
+     微信账单页收入是 +，支出是 -；支付宝有时写「收入 2000.00」。 */
+  function parseBillAmount(line) {
+    const s = String(line).trim();
+    let m = s.match(/^([+\-−])\s*[¥￥]?\s*([\d,]+(?:\.\d{1,2})?)/);
+    if (m) {
+      const amt = parseAmount(m[2]);
+      if (!isFinite(amt)) return null;
+      return { amount: Math.abs(amt), type: (m[1] === '+' ? 'income' : 'expense') };
+    }
+    m = s.match(/^(收入|支出|收款|付款)\s*[¥￥]?\s*([\d,]+(?:\.\d{1,2})?)/);
+    if (m) {
+      const amt = parseAmount(m[2]);
+      if (!isFinite(amt)) return null;
+      return { amount: Math.abs(amt), type: /收入|收款/.test(m[1]) ? 'income' : 'expense' };
+    }
+    /* 光秃秃一个金额：方向交给后面「已收钱/支付成功」判断 */
+    m = s.match(/^[¥￥]?\s*([\d,]+\.\d{1,2})$/);
+    if (m) {
+      const amt = parseAmount(m[1]);
+      if (isFinite(amt)) return { amount: Math.abs(amt), type: null };
+    }
+    return null;
+  }
+
+  function parseBillDate(line, fallbackYear) {
+    const s = String(line).trim();
+
+    /* ⚠️ 必须先把「纯金额」排除掉。
+       踩过的坑：无年份的分隔符里放了 `.`，于是 "-32.00" 被当成
+       「32月00日」解析成 2026-32-00；"+2000.00" 变成 2026-00-00。
+       金额行永远不该被当日期。 */
+    if (/^[+\-−¥￥]/.test(s)) return null;
+    if (/^[\d,]+\.\d{1,2}$/.test(s)) return null;
+    /* 带货币符号的也排除 */
+    if (/[¥￥]/.test(s) && !/[年月日]/.test(s)) return null;
+
+    let m = s.match(/(\d{4})\s*[-/年.]\s*(\d{1,2})\s*[-/月.]\s*(\d{1,2})/);
+    if (m) {
+      const mo = +m[2], dy = +m[3];
+      if (mo >= 1 && mo <= 12 && dy >= 1 && dy <= 31) {
+        return { date: `${m[1]}-${U.pad(mo)}-${U.pad(dy)}`, year: +m[1] };
+      }
+    }
+    /* 中文「10月2日」——只认「月/日」字样，不用 `.` 当分隔符 */
+    m = s.match(/(\d{1,2})\s*月\s*(\d{1,2})\s*日?/);
+    if (m) {
+      const mo = +m[1], dy = +m[2];
+      if (mo >= 1 && mo <= 12 && dy >= 1 && dy <= 31) {
+        const y = fallbackYear || new Date().getFullYear();
+        return { date: `${y}-${U.pad(mo)}-${U.pad(dy)}`, year: y };
+      }
+    }
+    /* 「10/2」这种短写：要求整行基本就是个日期，别把小数当日期 */
+    m = s.match(/^(\d{1,2})[-/](\d{1,2})(?![\d.])/);
+    if (m) {
+      const mo = +m[1], dy = +m[2];
+      if (mo >= 1 && mo <= 12 && dy >= 1 && dy <= 31) {
+        const y = fallbackYear || new Date().getFullYear();
+        return { date: `${y}-${U.pad(mo)}-${U.pad(dy)}`, year: y };
+      }
+    }
+    if (/^今天/.test(s)) return { date: U.ymd(U.today()), year: null };
+    if (/^昨天/.test(s)) return { date: U.ymd(U.addDays(U.today(), -1)), year: null };
+    return null;
+  }
+
+  function parseBillTime(line) {
+    const m = String(line).match(/(\d{1,2})\s*[:：]\s*(\d{1,2})/);
+    if (!m) return '';
+    return U.pad(Math.min(23, +m[1])) + ':' + U.pad(Math.min(59, +m[2]));
+  }
+
+  /** 从一行里猜「对方」：一般是最像商户/人名的中文片段 */
+  function guessCounterparty(line) {
+    const s = String(line).trim();
+    if (!s) return '';
+    return s
+      /* 去掉类型前缀 */
+      .replace(/^(转账|消费|商户消费|扫二维码付款|二维码收款|群收款|红包|微信红包|收款|付款)[-—·\s]*/g, '')
+      /* 「来自张三」「转给张三」→ 张三 */
+      .replace(/^(来自|转给|给|收到)\s*/g, '')
+      .replace(/[-—·]\s*(来自|转给|收款|付款)$/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 40);
+  }
+
+  /**
+   * 解析「账单页复制的文字」
+   * @param {string} text
+   * @param {object} [opts] { year: 默认年份 }
+   * @returns {{txns:Array, warnings:string[]}}
+   */
+  W.parseBillText = function (text, opts) {
+    const out = { txns: [], warnings: [] };
+    if (text == null) return out;
+    let src = String(text).replace(/\r\n?/g, '\n').trim();
+    if (!src) { out.warnings.push('内容为空'); return out; }
+
+    const lines = src.split('\n').map(l => l.trim()).filter(Boolean);
+    const fallbackYear = (opts && opts.year) || null;
+
+    /* 状态词用来定方向（当金额没带符号时）。
+       注意「已退款」匹配不到「已全额退款」，所以用「退款」而不是「已退款」。 */
+    const INCOME_HINT = /已收钱|已到账|已收款|收款成功|收入|退款/;
+    const EXPENSE_HINT = /支付成功|已支付|付款成功|支出|交易成功|已扣款/;
+
+    let cur = null;                 // 正在攒的这一笔
+    let lastYear = fallbackYear;
+    let pendingDir = null;          // 来自状态行的方向提示
+
+    const flush = () => {
+      if (!cur) return;
+      if (cur.date && cur.amount != null && cur.type) {
+        cur.txn.category = cur.txn.category || '其他';
+        out.txns.push(W.finalizeTxn(cur.txn));
+      } else if (cur.date && cur.amount != null && !cur.type) {
+        out.warnings.push(`有一笔 ${cur.date} ¥${cur.amount} 没认出是收入还是支出，已跳过`);
+      }
+      cur = null;
+      pendingDir = null;
+    };
+
+    lines.forEach(line => {
+      /* 跳过账单页的装饰性文字 */
+      if (/^(全部|筛选|账单|月账单|收支统计|查看|更多|统计|图表|¥?\s*合计)/.test(line)) return;
+      if (/^\d{4}年\d{1,2}月$/.test(line)) { lastYear = null; return; }   // 「2026年10月」这种月标题
+
+      const dt = parseBillDate(line, lastYear);
+      let amt = parseBillAmount(line);
+
+      /* 一行同时含日期和金额（截图 OCR / 复制单条时很常见） */
+      if (dt && !amt) {
+        /* 先把日期和时间从行里挖掉再找金额。
+           不能直接在整个行里搜金额——日期「2026-10-02」里的
+           「-10」「-02」会被当成负数金额。 */
+        const rest = line
+          .replace(/\d{4}\s*[-/年.]\s*\d{1,2}\s*[-/月.]\s*\d{1,2}\s*日?/, '')
+          .replace(/\d{1,2}\s*[:：]\s*\d{1,2}/, '');
+        let m2 = rest.match(/([+\-−])\s*[¥￥]?\s*([\d,]+(?:\.\d{1,2})?)/);
+        if (m2) {
+          const v = parseAmount(m2[2]);
+          if (isFinite(v)) {
+            amt = { amount: Math.abs(v), type: m2[1] === '+' ? 'income' : 'expense' };
+          }
+        } else {
+          /* 没符号就找一个带小数点的数字，方向交给状态词 */
+          m2 = rest.match(/([\d,]+\.\d{1,2})/);
+          if (m2) {
+            const v = parseAmount(m2[1]);
+            if (isFinite(v)) amt = { amount: Math.abs(v), type: null };
+          }
+        }
+      }
+
+      if (dt && amt) {
+        flush();
+        lastYear = dt.year || lastYear;
+        cur = {
+          date: dt.date, amount: amt.amount, type: amt.type,
+          txn: {
+            id: '', date: dt.date, time: parseBillTime(line),
+            type: amt.type || '', amount: amt.amount,
+            counterparty: '', product: '', bizType: '', method: '',
+            status: '', tradeNo: '', merchantNo: '', note: '',
+            category: '其他', raw: line, source: 'bill-text'
+          }
+        };
+        return;
+      }
+
+      /* 纯日期行：开一笔新的 */
+      if (dt) {
+        flush();
+        lastYear = dt.year || lastYear;
+        cur = {
+          date: dt.date, amount: null, type: null,
+          txn: {
+            id: '', date: dt.date, time: parseBillTime(line),
+            type: '', amount: 0,
+            counterparty: '', product: '', bizType: '', method: '',
+            status: '', tradeNo: '', merchantNo: '', note: '',
+            category: '其他', raw: line, source: 'bill-text'
+          }
+        };
+        return;
+      }
+
+      /* 纯金额行 */
+      if (amt) {
+        if (!cur) {
+          /* 没有日期就先记着，等下一个日期行补上 */
+          cur = {
+            date: '', amount: amt.amount, type: amt.type,
+            txn: { id: '', date: '', time: '', type: amt.type || '', amount: amt.amount,
+              counterparty: '', product: '', bizType: '', method: '', status: '',
+              tradeNo: '', merchantNo: '', note: '', category: '其他', raw: line, source: 'bill-text' }
+          };
+        } else {
+          cur.amount = amt.amount;
+          cur.txn.amount = amt.amount;
+          if (amt.type) { cur.type = amt.type; cur.txn.type = amt.type; }
+        }
+        return;
+      }
+
+      /* 状态行：定方向 */
+      if (INCOME_HINT.test(line) || EXPENSE_HINT.test(line)) {
+        const isIncome = INCOME_HINT.test(line);
+        if (cur) {
+          if (!cur.type) { cur.type = isIncome ? 'income' : 'expense'; cur.txn.type = cur.type; }
+          cur.txn.status = line.slice(0, 20);
+        } else {
+          pendingDir = isIncome ? 'income' : 'expense';
+        }
+        return;
+      }
+
+      /* 其它文字：当作对方/商品描述 */
+      if (cur) {
+        const name = guessCounterparty(line);
+        if (name && !cur.txn.counterparty) {
+          cur.txn.counterparty = name;
+          cur.txn.product = name;
+        } else if (name && !cur.txn.note) {
+          cur.txn.note = name;
+        }
+      }
+    });
+    flush();
+
+    if (!out.txns.length) {
+      out.warnings.push('没解析出记录。复制账单页时可只选一条记录的文字，或改用截图识别。');
+    }
+    return out;
+  };
+
+  /** 把账单文字导入（含去重） */
+  W.importBillText = function (text, existing, opts) {
+    const parsed = W.parseBillText(text, opts);
+    const dd = W.dedupe(existing || [], parsed.txns);
+    return {
       warnings: parsed.warnings,
       fresh: dd.fresh,
       dupes: dd.dupes,

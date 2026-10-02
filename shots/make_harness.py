@@ -19,14 +19,28 @@ base = (SHOTS / 'harness.html').read_text(encoding='utf-8')
 # (视图, 动作) —— 动作会在这批假数据灌完后自动触发
 SPECS = [
     ('today', ''), ('plan', ''), ('import', ''), ('body', ''), ('money', ''), ('learn', ''),
+    ('history', 'history-week', 'harness-history-week.html'),    # 回顾：周
+    ('history', 'history-month', 'harness-history-month.html'),   # 回顾：月
+    ('history', 'history-year', 'harness-history-year.html'),     # 回顾：年
+    ('history', 'history-empty', 'harness-history-empty.html'),   # 回顾：空库
     ('import', 'parse-scroll'),     # 解析一段群消息并滚到结果列表
     ('plan', 'calendar'),           # 切到日历模式
     ('today', 'taskeditor'),        # 打开新建任务浮层
+    ('help', ''),                   # 操作手册（默认只展开第一节）
+    ('help', 'expand'),             # 操作手册全部展开
+    ('body', 'meal-ai'),            # 饮食：AI 查食物 / 拍照入口
+    ('money', 'import'),            # 账本：三种导入入口
+    ('money', 'import-text'),       # 账本：粘贴文字
+    ('money', 'import-csv'),        # 账本：CSV
+    ('money', 'rules'),             # 账本分类规则
+    ('money', 'batch'),             # 账本批量整理
 ]
 
 made = []
-for view, act in SPECS:
-    name = 'harness-%s%s.html' % (view, ('-' + act) if act else '')
+for spec in SPECS:
+    view, act = spec[0], spec[1]
+    custom = spec[2] if len(spec) > 2 else None
+    name = custom or ('harness-%s%s.html' % (view, ('-' + act) if act else ''))
     body_attrs = 'data-view="%s"' % view
     if act:
         body_attrs += ' data-action="%s"' % act

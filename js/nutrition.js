@@ -128,16 +128,63 @@
 
   N.FOODS = FOODS;
 
-  /* 建立检索索引 */
-  const INDEX = FOODS.map(f => ({ ...f, lower: f.n.toLowerCase() }));
-  Object.keys(ALIAS).forEach(a => {
-    const target = FOODS.find(f => f.n === ALIAS[a]);
-    if (target) INDEX.push({ ...target, lower: a.toLowerCase(), alias: a });
-  });
+  /* ── AI 学到的食物 ──────────────────────────────
+     内置库只有一百来条，摊子、外卖、饮料大多没有。
+     用 AI 查过/识别过的食物存到这里，下次就能：
+       · 直接搜到，不用再花 token
+       · 保留当时认定的营养值，口径一致
+     存在 store 里所以会持久化，换设备走导出导入。
+     ──────────────────────────────────────────── */
+  const CUSTOM_KEY = 'customFoods';
+
+  N.customFoods = function () {
+    try { return S.all(CUSTOM_KEY) || []; } catch (e) { return []; }
+  };
+
+  /** 把 AI 结果记进本地库（已存在同名就不重复存） */
+  N.learn = function (food) {
+    if (!food || !food.n) return null;
+    const name = String(food.n).trim();
+    if (!name) return null;
+    /* 内置库里已有同名的，不覆盖——内置数据更可信 */
+    if (FOODS.some(f => f.n === name)) return null;
+    const exist = N.customFoods().find(f => f.n === name);
+    if (exist) return exist;
+    const row = {
+      n: name,
+      k: Number(food.k) || 0, p: Number(food.p) || 0, f: Number(food.f) || 0,
+      c: Number(food.c) || 0, fib: Number(food.fib) || 0,
+      unit: food.unit || '份', gram: Number(food.gram) || 100,
+      tag: food.tag || 'AI', ai: true, note: food.note || ''
+    };
+    try { S.add(CUSTOM_KEY, row); } catch (e) { return null; }
+    return row;
+  };
+
+  /** 所有可检索的食物 = 内置 + AI 学到的 */
+  function allFoods() {
+    const custom = N.customFoods();
+    if (!custom.length) return FOODS;
+    const seen = new Set(FOODS.map(f => f.n));
+    return FOODS.concat(custom.filter(f => f && f.n && !seen.has(f.n)));
+  }
+
+  /* 建立检索索引（每次都重建，这样 AI 新学到的立刻能搜到） */
+  function buildIndex() {
+    const list = allFoods();
+    const idx = list.map(f => ({ ...f, lower: String(f.n).toLowerCase() }));
+    Object.keys(ALIAS).forEach(a => {
+      const target = FOODS.find(f => f.n === ALIAS[a]);
+      if (target) idx.push({ ...target, lower: a.toLowerCase(), alias: a });
+    });
+    return idx;
+  }
+  let INDEX = buildIndex();
 
   N.search = function (q, limit = 12) {
+    INDEX = buildIndex();                 // 重建：AI 刚学到的也要能搜到
     q = (q || '').trim().toLowerCase();
-    if (!q) return FOODS.slice(0, limit);
+    if (!q) return allFoods().slice(0, limit);
     const exact = [], starts = [], contains = [];
     INDEX.forEach(f => {
       if (f.n === q || f.alias === q) exact.push(f);
@@ -154,7 +201,8 @@
 
   N.find = function (name) {
     if (!name) return null;
-    const q = name.trim().toLowerCase();
+    INDEX = buildIndex();
+    const q = String(name).trim().toLowerCase();
     return INDEX.find(f => f.n === name || f.alias === name)
         || INDEX.find(f => f.lower === q)
         || INDEX.find(f => f.n.includes(name) || (f.alias || '').includes(name))
@@ -166,8 +214,27 @@
    * @param {object} item { name, grams, unit, count }
    */
   N.calc = function (item) {
-    const food = N.find(item.name);
     let grams = Number(item.grams) || 0;
+
+    /* AI 认定的营养值优先。
+       照片识别时 AI 会连带判断「这盘多少克」，
+       这个数比默认份量准，所以先取它。 */
+    const ai = item.nut;
+    if (ai && (Number(ai.k) || Number(ai.p) || Number(ai.c))) {
+      if (!grams) grams = Number(item.photoGrams) || Number(item.gram) || 100;
+      const f = grams / 100;
+      return {
+        name: item.name, grams,
+        kcal: (Number(ai.k) || 0) * f,
+        p: (Number(ai.p) || 0) * f,
+        f: (Number(ai.f) || 0) * f,
+        c: (Number(ai.c) || 0) * f,
+        fib: (Number(ai.fib) || 0) * f,
+        unknown: false, ai: true
+      };
+    }
+
+    const food = N.find(item.name);
     if (!grams && food && item.count) grams = food.gram * Number(item.count);
     if (!grams) grams = food ? food.gram : 100;
 
@@ -185,8 +252,9 @@
 
   /** 一天汇总 */
   N.dayTotals = function (meals) {
-    const t = { kcal: 0, p: 0, f: 0, c: 0, fib: 0, items: 0, unknown: 0 };
+    const t = { kcal: 0, p: 0, f: 0, c: 0, fib: 0, items: 0, unknown: 0, skipped: 0 };
     (meals || []).forEach(m => {
+      if (m.skipped) { t.skipped++; return; }      // 明确没吃的不算营养，只计数
       (m.items || []).forEach(it => {
         const r = N.calc(it);
         t.kcal += r.kcal; t.p += r.p; t.f += r.f; t.c += r.c; t.fib += r.fib;
@@ -194,7 +262,7 @@
         if (r.unknown) t.unknown++;
       });
     });
-    return { kcal: Math.round(t.kcal), p: U.round(t.p, 1), f: U.round(t.f, 1), c: U.round(t.c, 1), fib: U.round(t.fib, 1), items: t.items, unknown: t.unknown };
+    return { kcal: Math.round(t.kcal), p: U.round(t.p, 1), f: U.round(t.f, 1), c: U.round(t.c, 1), fib: U.round(t.fib, 1), items: t.items, unknown: t.unknown, skipped: t.skipped };
   };
 
   /* 三大营养素供能比（%） */
@@ -299,6 +367,10 @@
     const byType = { breakfast: '早餐', lunch: '午餐', dinner: '晚餐', snack: '加餐/零食' };
     ['breakfast', 'lunch', 'dinner', 'snack'].forEach(t => {
       const list = (meals || []).filter(m => m.type === t);
+      /* 三种状态必须分开报：明确「没吃」和「没记录」是两回事。
+         前者是要干预的事实（该提醒补蛋白、别拖到中午暴食），
+         后者只是数据缺失。混在一起 AI 只能瞎猜。 */
+      if (list.some(m => m.skipped)) { L.push(`- ${byType[t]}：明确没吃（用户主动标记）`); return; }
       if (!list.length) { L.push(`- ${byType[t]}：未记录`); return; }
       list.forEach(m => {
         const items = (m.items || []).map(it => {
