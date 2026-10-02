@@ -1326,4 +1326,68 @@ harness 里灌导入留痕时塞的是**裸对象**（没进库、没 id），
 
 ---
 
-*最后更新：2026-10-02（修好 SW 更新路径 + 撤销兼容老导入；879 项断言全绿）*
+## 二十五、固定底栏踩的坑：点了「更新」没反应（2026-10-02 第十三轮）
+
+用户：**「现在就是v10,但是编辑账单明细之后我发现更新按钮失效，点了没反应」**。
+
+### 根因：我把按钮挪进底栏，却把变量留在了 rebuild() 里
+
+上一轮为了不让「删除」被长表单埋掉，把操作按钮从 `rebuild()` 里挪到了
+独立的 `buildActions()`（`App.sheet` 的 footer）。但那个按钮的处理器要读
+`remembers`（「记住这条规则」勾选框），而 `remembers` 是**在 `rebuild()` 里
+`const` 出来的**：
+
+```js
+function rebuild() {
+  const remembers = U.el('input', ...);   // ← 只活在 rebuild 的作用域里
+  ...
+}
+function buildActions() {                 // ← 和 rebuild 平级
+  if (!isNew && remembers.checked) ...    // ← ReferenceError
+}
+```
+
+点击时抛 `Uncaught ReferenceError: remembers is not defined`，
+被浏览器吞进控制台，页面毫无反应 —— 就是用户说的「点了没反应」。
+**批量整理的「应用到 N 笔」是同一个 bug**，因为那边的 `remembers` 也在 `rebuild()` 里。
+
+修法：把 `remembers` 提到 `rebuild()` 外面（`openTxnEditor` / `openBatchEditor` 各自的作用域），
+只建一次，`rebuild()` 时重新挂上去。顺带修掉一个隐性问题：
+原来每次 `rebuild()` 都新建勾选框，用户勾的状态会被下一次 rebuild 重置。
+现在用 `remembersInit` 只在第一次设默认值。
+
+还加了 `rememberShown`：关键词太短时勾选框根本不画出来，
+那就不能拿它的勾选状态去学规则（否则会学出一条关键词过短的废规则）。
+
+### 教训：同类错误栽了第二次
+
+第十二轮刚记过「**测『用户点得到吗』，不要测『函数调得动吗』**」，
+这一轮又犯了 —— 上次是 `onclick` 直挂函数收了 MouseEvent，
+这次是闭包变量跨作用域。两个 bug 都在 `onclick`  handler 那一层，
+两个都因为测试**直接调函数**而漏过。
+
+所以补的不是「检查 remembers 能不能读到」这种函数级断言，
+而是**真点按钮**的 harness 页：
+- `money-edit-save`：打开编辑面板 → 找到底栏的「更新」→ `click()` →
+  把 `window.onerror`、面板开关状态、toast 文本、记录是否还在写进 DOM attributes。
+- `money-batch-save`：填好「新用途」→ 点「应用到 N 笔」→ 同样记录。
+
+断言直接读这些 attribute：
+`data-err="无"` / `data-sheet="关"` / `data-toast="已保存…"`。
+
+**验证方式照旧 —— 把 bug 退回去，确认测试真的会红**：
+
+```
+✗ 点更新时没有 JS 报错 报了：Uncaught ReferenceError: remembers is not defined
+✗ 点更新后面板关闭（说明真的存了） 面板还开着：开
+✗ 点更新后弹出已保存提示 toast 是：
+✗ remembers 声明在 rebuild 之外 remembers 又跑回 rebuild() 里了
+```
+
+四条全红，报错信息和用户描述一模一样。
+另加一条**源码级防线**：断言 `remembers` 的声明不在 `function rebuild() {` 之后，
+防止以后又把它挪回去。
+
+---
+
+*最后更新：2026-10-02（修复编辑/批量保存按钮点了没反应；889 项断言全绿）*

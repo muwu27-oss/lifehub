@@ -37,6 +37,8 @@ SPECS = [
     ('money', 'import-csv'),        # 账本：CSV
     ('money', 'edit'),              # 账本：单笔编辑（删除按钮的位置）
     ('today', 'settings'),          # 设置面板（版本号 + 检查更新）
+    ('money', 'edit-save'),         # 真点「更新」（回归：点了没反应）
+    ('money', 'batch-save'),        # 真点「应用到 N 笔」
     ('money', 'rules'),             # 账本分类规则
     ('money', 'batch'),             # 账本批量整理
 ]

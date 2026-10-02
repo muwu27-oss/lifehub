@@ -348,6 +348,14 @@
 
     const patch = { category: '', purpose: '' };
 
+    /* 「按对方记住规则」勾选框放在这一层，不放 rebuild() 里 ——
+       固定底栏的 buildActions() 要读它，放在 rebuild() 里面就引用不到，
+       点「应用」会抛 ReferenceError 静默死掉（踩过：按钮点了没反应）。
+       只建一次，rebuild 时重新挂上去，用户勾的状态也不会被重置。 */
+    const remembers = U.el('input', { type: 'checkbox' });
+    remembers.checked = true;
+    remembers.style.cssText = 'width:18px;height:18px;flex-shrink:0;accent-color:var(--brand)';
+
     const box = U.el('div', {}, []);
     function rebuild() {
       box.innerHTML = '';
@@ -371,9 +379,6 @@
         App.input('text', patch.purpose, v => { patch.purpose = v; }, '如 生活费 / 房租')));
 
       /* 记住规则：批量整理完通常都希望下次自动 */
-      const remembers = U.el('input', { type: 'checkbox' });
-      remembers.checked = true;
-      remembers.style.cssText = 'width:18px;height:18px;flex-shrink:0;accent-color:var(--brand)';
       box.appendChild(U.el('label', {
         style: { display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer',
           background: 'var(--bg-sunken)', padding: '10px 12px', borderRadius: '10px', marginBottom: '14px' }
@@ -622,6 +627,16 @@
 
     const box = U.el('div', {}, []);
 
+    /* 「记住这条规则」勾选框也提到这一层，理由同批量整理：
+       底栏的 buildActions() 要读 remembers.checked，
+       留在 rebuild() 里就是 ReferenceError → 点「更新」毫无反应。
+       rememberShown 记录这次有没有真的把勾选框画出来 ——
+       关键词太短时它不显示，那就不能拿它的勾选状态去学规则。 */
+    const remembers = U.el('input', { type: 'checkbox' });
+    remembers.style.cssText = 'width:18px;height:18px;flex-shrink:0;accent-color:var(--brand)';
+    let rememberShown = false;
+    let remembersInit = false;
+
     function rebuild() {
       box.innerHTML = '';
       box.appendChild(App.field('类型', App.seg([
@@ -656,10 +671,9 @@
       /* 记住规则：这是「下次导入自动分好」的关键。
          默认勾上，因为用户既然手动改了，多半希望以后都这样。 */
       const kwPreview = (t.counterparty || t.product || '').trim();
-      const remembers = U.el('input', { type: 'checkbox' });
-      remembers.checked = !!(kwPreview && kwPreview.length >= 2 && !isNew);
-      remembers.style.cssText = 'width:18px;height:18px;flex-shrink:0;accent-color:var(--brand)';
-      if (kwPreview && kwPreview.length >= 2 && !isNew) {
+      rememberShown = !!(kwPreview && kwPreview.length >= 2 && !isNew);
+      if (!remembersInit) { remembers.checked = rememberShown; remembersInit = true; }
+      if (rememberShown) {
         box.appendChild(U.el('label', {
           style: {
             display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer',
@@ -707,7 +721,7 @@
             if (!isNew) t.edited = true;
 
             let learned = null;
-            if (!isNew && remembers.checked) {
+            if (!isNew && rememberShown && remembers.checked) {
               learned = S.learnRuleFromTxn(t);
             } else if (isNew && (t.counterparty || t.product || '').length >= 2 && t.category) {
               learned = S.learnRuleFromTxn(t);

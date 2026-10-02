@@ -326,6 +326,35 @@ ok('批量整理底栏有删除', /删除 3 笔/.test(batchSheet), '批量面板
 /* 导入记录每行要有「撤销」——导错一整批时不用一笔一笔删 */
 ok('导入记录有撤销按钮', /撤销/.test(impPick), '没有整批撤销的入口');
 
+/* ═══ 真点「更新」/「应用到」 ═══
+   用户原话：「编辑账单明细之后我发现更新按钮失效，点了没反应」。
+   根因：把操作按钮挪进固定底栏的 buildActions() 之后，
+   它引用的 remembers 还留在 rebuild() 里 —— 点击时抛 ReferenceError，
+   被浏览器吞掉，表现就是「点了没反应」。
+   直接调 Views.moneyEdit() 测不出来，必须真点按钮。 */
+const editSave = dom('http://127.0.0.1:8777/harness-money-edit-save.html');
+const pickAttr = (h, k) => (h.match(new RegExp('data-' + k + '="([^"]*)"')) || [])[1];
+
+ok('编辑面板找到了「更新」按钮', /更新|保存/.test(pickAttr(editSave, 'btn') || ''),
+   '底栏里没找到更新按钮：' + pickAttr(editSave, 'btn'));
+const editErr = pickAttr(editSave, 'err');
+ok('点更新时没有 JS 报错', editErr === '无', '报了：' + editErr);
+ok('点更新后面板关闭（说明真的存了）', pickAttr(editSave, 'sheet') === '关',
+   '面板还开着：' + pickAttr(editSave, 'sheet'));
+ok('点更新后弹出已保存提示', /已保存|已更新/.test(pickAttr(editSave, 'toast') || ''),
+   'toast 是：' + pickAttr(editSave, 'toast'));
+ok('点更新后这笔记录还在', pickAttr(editSave, 'txn-alive') === '在');
+
+const batchSave = dom('http://127.0.0.1:8777/harness-money-batch-save.html');
+ok('批量面板找到了「应用到」按钮', /应用到/.test(pickAttr(batchSave, 'btn') || ''),
+   '底栏按钮是：' + pickAttr(batchSave, 'btn'));
+const batchErr = pickAttr(batchSave, 'err');
+ok('点应用时没有 JS 报错', batchErr === '无', '报了：' + batchErr);
+ok('点应用后面板关闭', pickAttr(batchSave, 'sheet') === '关',
+   '面板还开着：' + pickAttr(batchSave, 'sheet'));
+ok('点应用后弹出已整理提示', /已整理/.test(pickAttr(batchSave, 'toast') || ''),
+   'toast 是：' + pickAttr(batchSave, 'toast'));
+
 /* 设置页要能看到版本号，并且有强制更新入口 ——
    手机上「改了没生效」时，这是唯一的自救办法。 */
 const settingsSheet = dom('http://127.0.0.1:8777/harness-today-settings.html');
@@ -342,6 +371,15 @@ const moneyCode = moneySrc
 ok('导入入口没有把事件对象当参数', !/onclick:\s*openWeChatImport\b/.test(moneyCode),
    'onclick 直接挂函数会把 MouseEvent 当第一个参数');
 ok('注释剥离自身有效', /openWeChatImport/.test(moneyCode), '剥太狠了，代码都没了');
+
+/* 底栏里的处理器不能再引用 rebuild() 内部的变量。
+   remembers 必须声明在 rebuild 之外 —— 这是上面那个 bug 的源码级防线。 */
+const moneyCodeNS = moneyCode;
+ok('remembers 声明在 rebuild 之外',
+   /const remembers = U\.el\('input'/.test(moneyCodeNS) &&
+   !/function rebuild\(\) \{[\s\S]{0,2000}?const remembers = U\.el\('input'/.test(moneyCodeNS),
+   'remembers 又跑回 rebuild() 里了，底栏会引用不到');
+
 ok('入口对非字符串参数有兜底',
    /typeof initialMode === 'string'/.test(moneySrc));
 ok('render 对未知 mode 有兜底', /MODES\.indexOf\(mode\)/.test(moneySrc));
