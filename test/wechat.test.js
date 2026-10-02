@@ -69,6 +69,52 @@ console.log('\n=== 容错 ===');
   catch(e){ ok(`${n} 不抛异常`, false, e.message); }
 });
 
+console.log('\n=== 分类改名：人情 → 借还钱（用户要求，免得 AI 误会）===');
+/* 转账/还款是「过手」的钱，不是消费。原来归到「人情」，
+   AI 读账本时会理解成「人情往来（送礼）」—— 这是实打实的误判。 */
+const cat = t => WeChat.categorize(t);
+[['李四','转账','还款'],['家里','转账','生活费'],['王五','红包',''],['张三','垫付','']]
+  .forEach(([cp,prod,note]) => {
+    const c = cat({counterparty:cp, product:prod, note:note});
+    ok(`「${prod||note}」判成借还钱（原人情）`, c === '借还钱', c);
+  });
+/* 红包默认算还钱（用户说真人情红包他手动改） */
+ok('红包默认算借还钱，不是人情往来',
+   cat({counterparty:'王五', product:'红包'}) === '借还钱',
+   cat({counterparty:'王五', product:'红包'}));
+/* 真送礼的词还认得出，省得他每次手点 */
+[['某店','礼物'],['某店','礼金'],['某店','中秋礼盒']].forEach(([cp,prod]) => {
+  const c = cat({counterparty:cp, product:prod});
+  ok(`「${prod}」判成人情往来`, c === '人情往来', c);
+});
+ok('分类表里有借还钱', WeChat.CATEGORIES.indexOf('借还钱') >= 0);
+ok('分类表里有人情往来（留给他手动改的备选）', WeChat.CATEGORIES.indexOf('人情往来') >= 0);
+ok('分类表里不再有「人情」', WeChat.CATEGORIES.indexOf('人情') < 0,
+   '还有人情，AI 会继续误会');
+
+console.log('\n=== 老数据里的「人情」要一起改掉 ===');
+/* 光改词表不够：他之前记下的账和学到的规则里还写着「人情」 */
+S.db.txns.length = 0; S.db.txnRules.length = 0;
+S.add('txns', {date:'2026-09-01', type:'expense', amount:200, category:'人情', counterparty:'李四'});
+S.add('txns', {date:'2026-09-02', type:'expense', amount:30, category:'餐饮', counterparty:'食堂'});
+S.add('txnRules', {keyword:'李四', category:'人情'});
+S.db.settings.money.catRename = undefined;      // 让闸门重新打开
+localStorage.setItem('lifehub.v1', JSON.stringify(S.db));
+S.init(true);
+const byCp = {}; S.db.txns.forEach(t => { byCp[t.counterparty] = t; });
+ok('旧账「人情」→ 借还钱', byCp['李四'] && byCp['李四'].category === '借还钱',
+   byCp['李四'] && byCp['李四'].category);
+ok('旧规则「人情」→ 借还钱', S.db.txnRules[0].category === '借还钱', S.db.txnRules[0].category);
+ok('别的分类没被误伤', byCp['食堂'].category === '餐饮', byCp['食堂'].category);
+ok('下拉框里不会再冒出「人情」', S.txnCategories().indexOf('人情') < 0, S.txnCategories().join('/'));
+/* 闸门：只跑一次。他哪天手动改回「人情」，不该下次启动又被改掉 */
+byCp['李四'].category = '人情';
+localStorage.setItem('lifehub.v1', JSON.stringify(S.db));
+S.init(true);
+const byCp2 = {}; S.db.txns.forEach(t => { byCp2[t.counterparty] = t; });
+ok('改动只做一次，不会反复覆盖他的手动修改', byCp2['李四'].category === '人情', byCp2['李四'].category);
+byCp2['李四'].category = '借还钱';
+
 console.log('\n=== 规则 ===');
 const rr = WeChat.applyRules({counterparty:'某小店',product:'x',note:''}, [{keyword:'某小店',category:'购物'}]);
 ok('applyRules 命中', rr==='购物', rr);

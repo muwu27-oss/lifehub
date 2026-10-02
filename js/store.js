@@ -238,7 +238,30 @@
       console.error('[store] 读取失败，重置', e);
       db = defaultDB();
     }
+    migrateCategoryNames();
     return db;
+  }
+
+  /* 一次性改名：分类「人情」→「借还钱」。
+     用户的要求原话是「把账本里命名为人情的地方改为借还钱，免得 AI 误会」——
+     转账/还款被读成「人情往来（送礼）」确实是误判。
+     光改词表不够：他自己已经记下的那些账和学到的规则里还写着「人情」，
+     下拉框里也会一直冒出一个「人情」来。所以老数据要一起改。
+     真的送礼留着「人情往来」这个分类给他手动改。
+     用 settings 里的版本号做闸门，只跑一次 —— 否则他哪天手动把某笔
+     改回「人情」，下次启动又会被改掉，越改越糊涂。 */
+  function migrateCategoryNames() {
+    if (!db || !db.settings || !db.settings.money) return;
+    if (db.settings.money.catRename === 1) return;
+    const RENAME = { '人情': '借还钱' };
+    let n = 0;
+    const fix = t => {
+      if (t && RENAME[t.category]) { t.category = RENAME[t.category]; n++; }
+    };
+    (db.txns || []).forEach(fix);
+    (db.txnRules || []).forEach(fix);
+    db.settings.money.catRename = 1;
+    if (n) console.log('[store] 分类改名 人情→借还钱：' + n + ' 条');
   }
 
   function deepMerge(base, over) {
