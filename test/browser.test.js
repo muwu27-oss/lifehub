@@ -151,6 +151,20 @@ ok('有 AI 查询入口', mealAi.includes('用 AI 查'), '未找到 AI 入口');
 ok('有通用估算的退路', mealAi.includes('通用估算'), 'AI 挂了会卡住用户');
 ok('搜索框能回显输入', mealAi.includes('宫保鸡丁'));
 
+/* 5a. 饮食作息页的「发给 AI 评价这一天」必须真有反应。
+   用户报过：按下去完全没反应。原因是 App.aiRun 去找 #aiOut，
+   而那个输出区只在 AI 面板里，饮食页上没有 —— 拿不到就静默 return 了。
+   这条断言盯的就是「静默」：按钮按了必须有看得见的东西出来。 */
+const bodyAiEval=dom('http://127.0.0.1:8777/harness-body-ai-eval.html');
+ok('饮食页找得到「发给 AI 评价这一天」按钮', bodyAiEval.includes('data-btn-found="找到"'),
+  '按钮本身没了');
+ok('★ 点了之后 AI 面板真的打开了（不是静默 return）',
+  bodyAiEval.includes('data-sheet-after="开了"'), '按下去没反应 = 用户报的那个 bug');
+ok('面板里有输出区', bodyAiEval.includes('data-ai-out="有"'));
+ok('★ 输出区真的写出了回复', bodyAiEval.includes('data-got-reply="有回复"'),
+  '面板开了但没内容，用户还是白点');
+ok('这一串点下来没有报错', bodyAiEval.includes('data-err="无"'));
+
 /* 5b. 账本：三种导入方式 */
 const impBill=dom('http://127.0.0.1:8777/harness-money-import.html');
 ok('导入面板打开', impBill.includes('导入账单'));

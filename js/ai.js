@@ -15,8 +15,9 @@
       baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
       /* 百炼的真实模型名（compatible-mode 也认这些名字）：
          qwen-max / qwen-plus 是通用对话模型，qwen-vl-max 能读图（识别课表要用它） */
-      models: ['qwen-plus', 'qwen-max', 'qwen-turbo', 'qwen-vl-max'],
-      visionModels: ['qwen-vl-max', 'qwen-vl-plus'],
+      models: ['qwen-plus', 'qwen-max', 'qwen-turbo', 'qwen-vl-max',
+        'qwen3.8-max', 'qwen3.7-plus', 'qwen3.8-flash'],
+      visionModels: ['qwen-vl-max', 'qwen-vl-plus', 'qwen3.8-omni-flash'],
       keyURL: 'https://bailian.console.aliyun.com/?apiKey=1',
       note: '国内直连、支持读图的模型，推荐用这个'
     },
@@ -44,9 +45,31 @@
 
   A.cfg = () => S.settings.ai;
 
-  A.isReady = function () {
-    const c = A.cfg();
+  /* 适合「文本 / 交流」这类活的模型，按用途分组。
+     事务性任务（识别课表、查食物热量）要的是快和便宜；
+     日记里的谈话要的是共情、长上下文、说人话 —— 不是一回事，
+     所以这里单独给一份清单，见模块说明书里的选型建议。 */
+  A.TEXT_MODELS = [
+    { value: 'qwen3.8-max',   label: 'qwen3.8-max（最强，深聊 / 月度总结首选）' },
+    { value: 'qwen3.7-plus',  label: 'qwen3.7-plus（性价比，日常谈话够用）' },
+    { value: 'qwen3.8-flash', label: 'qwen3.8-flash（最便宜，只做粗小结）' },
+    { value: 'qwen-max',      label: 'qwen-max（上一代旗舰，仍可用）' },
+    { value: 'qwen-plus',     label: 'qwen-plus（便宜，长篇会略平）' }
+  ];
+
+  /* 传入 cfg 就能检查「另一套配置」是否可用 ——
+     日记模块有自己独立的 API Key（用户要求单独配置），
+     没有这个参数的话它就只能去看外层的那套配置。 */
+  A.isReady = function (cfg) {
+    const c = cfg || A.cfg();
     return !!(c.enabled && c.apiKey && c.baseURL && c.model);
+  };
+
+  /** 宽松版：只要三项齐了就算能用，不看 enabled。
+   *  日记用它 —— 那边用户填完 Key 就直接能聊，不该再要求他去找一个开关。 */
+  A.usable = function (cfg) {
+    const c = cfg || A.cfg();
+    return !!(c && c.apiKey && c.baseURL && c.model);
   };
 
   /* ═══════════ 核心调用 ═══════════ */
@@ -56,7 +79,9 @@
    * @param {object} opts { temperature, maxTokens, onDelta, timeoutMs, json }
    */
   A.chat = async function (messages, opts = {}) {
-    const c = A.cfg();
+    /* opts.cfg 让调用方指定「用哪套配置」。
+       日记模块传自己的 settings.diaryAi，其余调用方不传、走全局那套。 */
+    const c = opts.cfg || A.cfg();
     if (!c.apiKey) throw new Error('还没填 API Key，请到「设置 → AI」里配置');
     if (!c.baseURL) throw new Error('还没填接口地址');
 
@@ -138,10 +163,10 @@
   };
 
   /** 测试连通性 */
-  A.test = async function () {
+  A.test = async function (cfg) {
     const out = await A.chat([
       { role: 'user', content: '回复"连接成功"四个字，不要别的。' }
-    ], { maxTokens: 20, temperature: 0 });
+    ], { maxTokens: 20, temperature: 0, cfg });
     return out.trim();
   };
 
@@ -325,8 +350,19 @@
     ], opts);
   };
 
-  /* ── 记录历史 ── */
+  /* ── 记录历史 ──
+     ⚠️ 日记模块**绝对不要调用这个函数**。
+     aiLogs 是明文集合，而且会跟着备份一起走 ——
+     日记的提示词里带着正文，一旦落进这里，
+     前面那套 AES-GCM 加密就等于白做了。
+     日记自己的用量记在它自己的密文记录里（见 diary.js）。
+     这里加一道拦：就算以后有人手滑调了，也不会把正文写进去。 */
+  const PRIVATE_KINDS = { diary: 1, 'diary-chat': 1, 'diary-digest': 1 };
   A.log = function (kind, prompt, output, model) {
+    if (PRIVATE_KINDS[kind]) {
+      console.warn('[ai] 拒绝把日记内容写进明文的 aiLogs：', kind);
+      return null;
+    }
     S.add('aiLogs', {
       kind, model: model || A.cfg().model,
       input: String(prompt).slice(0, 4000),

@@ -71,9 +71,20 @@ const soon = Sch.suggest({ title: '后天要交', cat: 'study', id: 'soon1',
   due: U.ymd(U.addDays(U.today(), 2)) }, { ignoreCourses: true });
 ok('2 天后的任务就近安排', soon && gapTo(soon) <= 2, soon && `距今 ${gapTo(soon)} 天`);
 
+/* 把「现在几点」钉死在早上 8 点。
+   不钉的话这条断言会随跑测试的钟点变结果：晚上跑，今天只剩一个
+   不到一小时的尾巴，60 分钟的任务排不下 → suggest 返回 null → 红。
+   注意这里测的是**排期逻辑**，不是「深夜还剩多少时间」，
+   所以固定 now 才能测到真正想测的东西。 */
 const urgent = Sch.suggest({ title: '今天截止', cat: 'study', id: 'urg1',
-  due: todayStr + 'T23:59' }, { ignoreCourses: true });
+  due: todayStr + 'T23:59' }, { ignoreCourses: true, now: todayStr + 'T08:00' });
 ok('今天截止的任务排今天', urgent && urgent.date === todayStr, urgent && urgent.date);
+
+/* 晚上 23:00 时确实排不下 —— 这是**对的**行为，顺手钉住它：
+   没时间了就该说实话，而不是硬塞一个马上过期的时段。 */
+const tooLate = Sch.suggest({ title: '今天截止', cat: 'study', id: 'urg2',
+  due: todayStr + 'T23:59' }, { ignoreCourses: true, now: todayStr + 'T23:00' });
+ok('深夜已无空档时不硬排（说实话）', tooLate === null, tooLate && tooLate.date);
 
 const tomorrow = Sch.suggest({ title: '明天要做', cat: 'cv', id: 'tmr1',
   due: U.ymd(U.addDays(U.today(), 1)) }, { ignoreCourses: true });

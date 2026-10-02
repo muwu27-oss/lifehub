@@ -29,6 +29,7 @@ SPECS = [
     ('help', ''),                   # 操作手册（默认只展开第一节）
     ('help', 'expand'),             # 操作手册全部展开
     ('body', 'meal-ai'),            # 饮食：AI 查食物 / 拍照入口
+    ('body', 'ai-eval'),            # 饮食页「发给 AI 评价这一天」必须真有反应（回归）
     ('money', 'import'),            # 账本：三种导入入口 + 导入记录
     ('money', 'import-photo'),      # 账本：截图识别说明页（上次截到哪儿）
     ('money', 'import-real'),       # 账本：真点「导入账单」按钮（回归：别掉进 CSV 页）
@@ -40,6 +41,9 @@ SPECS = [
     ('money', 'edit-save'),         # 真点「更新」（回归：点了没反应）
     ('money', 'batch-save'),        # 真点「应用到 N 笔」
     ('today', 'backup-import'),     # 真点「导入备份」走完整条换设备流程
+    ('today', 'diary-entry'),       # 长按「今天」进日记
+    ('today', 'diary-tap'),         # 轻点「今天」不能进日记
+    ('today', 'diary-flow'),        # 设密码 → 写日记 → 验证明文没泄漏
     ('money', 'rules'),             # 账本分类规则
     ('money', 'batch'),             # 账本批量整理
 ]

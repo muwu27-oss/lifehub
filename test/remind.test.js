@@ -265,7 +265,17 @@ S.settings.ai.apiKey = 'sk-real1234567890abcdef';
 S.settings.body.weight = 70;
 S.settings.body.dailyKcal = 1800;
 S.settings.money.monthlyIncome = 3000;
-ok('全部填完后清单为空', S.pendingList().length === 0, S.pendingList().length);
+S.settings.diaryAi.apiKey = 'sk-diary-real1234567890';
+ok('全部填完后清单为空', S.pendingList().length === 0,
+  '还剩：' + S.pendingList().map(x => x.key).join(','));
+
+/* 日记的 Key 是**单独一套**，占位值不算填过 ——
+   否则会拿着假 key 去请求，用户收到看不懂的 401，
+   而真正的原因是「你还没填」。 */
+S.reset(); S.init();
+S.settings.diaryAi.apiKey = 'sk-替换成你的百炼APIKey';
+ok('日记 Key 还是占位值时算「没配」',
+  S.pendingList().some(x => x.key === 'diaryApiKey'), '占位值被当成填过了');
 
 
 /* ═══════════════════════════════════

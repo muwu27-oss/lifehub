@@ -14,7 +14,11 @@
     money:  { title: '账本',     sub: () => '收支统计与储蓄',                                        render: () => Views.money() },
     history: { title: '回顾',    sub: () => '周 / 月 / 年 · 历史与健康趋势',                          render: () => Views.history() },
     learn:  { title: '学习蓝图', sub: () => '计算机视觉 · 具身智能',                                  render: () => Views.learn() },
-    help:   { title: '操作手册', sub: () => '怎么用 · 常见问题',                                      render: () => Views.help() }
+    help:   { title: '操作手册', sub: () => '怎么用 · 常见问题',                                      render: () => Views.help() },
+    /* 隐藏模块：不在底部导航里，靠长按「今天」进入。
+       tab:'today' 是让底部「今天」保持高亮 —— 否则所有标签都会失去选中态，
+       看起来像界面坏了。 */
+    diary:  { title: '日记',     sub: () => '只有你能看到',                                          render: () => Views.diary(), tab: 'today' }
   };
 
   App.current = 'today';
@@ -41,7 +45,8 @@
     U.$('#pageTitle').textContent = typeof v.title === 'function' ? v.title() : v.title;
     U.$('#pageSub').textContent = typeof v.sub === 'function' ? v.sub() : v.sub;
 
-    U.$$('.tab').forEach(t => t.classList.toggle('active', t.dataset.view === viewId));
+    const tabFor = v.tab || viewId;
+    U.$$('.tab').forEach(t => t.classList.toggle('active', t.dataset.view === tabFor));
 
     try {
       v.render();
@@ -447,7 +452,7 @@
       }),
       U.el('button', {
         class: 'btn danger sm grow', text: '清空所有数据',
-        onclick: () => App.confirm('这会删除全部任务、账目、饮食记录，且无法恢复。确定吗？', () => {
+        onclick: () => App.confirm('这会删除全部任务、账目、饮食记录，**以及加密的日记**，且无法恢复。确定吗？', () => {
           S.reset(); U.toast('已清空', 'ok'); App.go('today');
         }, '清空')
       })
@@ -651,9 +656,16 @@
   };
 
   App.aiRun = async function (kind, bodyNodes) {
-    const out = U.$('#aiOut');
     if (!AI.isReady()) return U.toast('请先在设置里配置 AI', 'err');
-    if (!out) return;
+
+    /* #aiOut 只存在于 AI 面板里，而「饮食作息」页上那个
+       「🤖 发给 AI 评价这一天」按钮会**直接**调到这里。
+       以前拿不到 #aiOut 就 `return` —— 按钮按下去完全没反应，
+       用户只会以为按钮坏了（这个 bug 是用户报上来的）。
+       现在：面板没开就先把面板开出来，再往里写。 */
+    if (!U.$('#aiOut')) App.openAI();
+    const out = U.$('#aiOut');
+    if (!out) return U.toast('打不开 AI 面板，稍后再试', 'err');
 
     out.textContent = '';
     const spin = U.el('div', { class: 'row', style: { alignItems: 'center', gap: '8px' } }, [
@@ -757,8 +769,90 @@
     mq.addEventListener('change', apply);
   }
 
+  /* ───────── 日记的隐蔽入口 ─────────
+     长按底部「今天」标签 1.2 秒进入。为什么用长按：
+     点一下是正常切到「今天」，别人拿起手机随手点不会发现这个模块；
+     自己也只要记「按住今天」一句话。 */
+  /* 长按是否已经触发过。用它让紧随其后的 click 失效。
+     ⚠️ 不能用 stopPropagation 来做这件事：
+     事件在**目标元素**上时，捕获型和冒泡型监听器是按**注册顺序**依次调用的，
+     捕获标志并不会让它提前。而标签的 click 早就绑定过了，
+     所以「后加一个 capture 监听器去拦」是拦不住的 —— 先跑的是原处理器。
+     用一个显式标志最可靠。 */
+  let longPressFired = false;
+
+  function bindDiaryEntry() {
+    const tab = U.$('.tab[data-view="today"]');
+    if (!tab) return;
+    let timer = null;
+
+    const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
+
+    tab.addEventListener('pointerdown', () => {
+      /* 每次新手势开始都把标志清掉。
+         不清的话：一次长按之后如果没等到那次补发的 click
+         （手指滑走了、或者系统根本没补），标志会一直留着 true，
+         下一次**普通轻点**就会被它吃掉 —— 用户会觉得「今天这个标签点不动了」。
+         这个坑是 test/diary-browser.test.js 抓出来的。 */
+      longPressFired = false;
+      cancel();
+      timer = setTimeout(() => {
+        timer = null;
+        longPressFired = true;
+        try { if (navigator.vibrate) navigator.vibrate(18); } catch (err) {}
+        App.go('diary');
+      }, 1200);
+    });
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev =>
+      tab.addEventListener(ev, cancel));
+
+    /* 手机上长按还会弹出系统的选择/复制菜单，一并压掉 */
+    tab.addEventListener('contextmenu', e => e.preventDefault());
+    tab.style.webkitTouchCallout = 'none';
+    tab.style.userSelect = 'none';
+  }
+
+  /* 闲置自动上锁。默认 5 分钟。
+     不在切走时立刻锁：那样去别处看一眼再回来就要重新输密码，太烦。 */
+  function startAutoLock() {
+    setInterval(() => {
+      if (!Diary.isUnlocked()) return;
+      const mins = Number(S.settings.diary.autoLockMinutes);
+      if (!mins || mins <= 0) return;
+      if (Date.now() - Diary.lastActive() > mins * 60000) {
+        Diary.lock();
+        if (App.current === 'diary') { App.go('diary'); U.toast('已自动上锁', 'info'); }
+      }
+    }, 20000);
+
+    /* 切到别的模块时也记一次活动时间，避免在别处待很久回来刚好被锁 */
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) Diary.touch();
+    });
+  }
+
+  /* bindShell 只许绑一次。
+     真机上 App.start() 只会跑一次，但测试页里会跑两次：
+     harness 自己调了一次，app.js 加载后那个 setTimeout(App.start, 0) 又跑一次。
+     绑两遍的后果不是「效果翻倍」，而是**行为错乱** ——
+     长按进日记后补发的那次 click 会被第一个监听器吃掉，
+     第二个监听器看到标志已经清掉了，就又把页面弹回「今天」；
+     顺带 #btnSettings 会开两次设置、自动上锁会挂两个定时器。
+     这个坑是 test/diary-browser.test.js 抓出来的。 */
+  let shellBound = false;
+
   function bindShell() {
-    U.$$('.tab').forEach(t => t.addEventListener('click', () => App.go(t.dataset.view)));
+    if (shellBound) return;
+    shellBound = true;
+
+    U.$$('.tab').forEach(t => t.addEventListener('click', () => {
+      /* 长按进日记之后紧跟着的那次 click 要吃掉，
+         否则会「先进日记，立刻又被弹回今天」。 */
+      if (t.dataset.view === 'today' && longPressFired) { longPressFired = false; return; }
+      App.go(t.dataset.view);
+    }));
+    bindDiaryEntry();
+    startAutoLock();
     U.$('#sheetClose').addEventListener('click', App.closeSheet);
     U.$('#scrim').addEventListener('click', App.closeSheet);
     U.$('#btnHelp').addEventListener('click', () => App.go('help'));
@@ -826,7 +920,18 @@
     Promise.all(jobs).then(bust).catch(bust);
   };
 
+  let started = false;
+
   App.start = function () {
+    /* 只启动一次。
+       真机上本来就只会跑一次，但测试页里会跑两次：
+       harness 自己调一次，app.js 加载后那个 setTimeout(App.start, 0) 又跑一次。
+       第二次会重新 App.go('today')，把用户（和测试）从当前页面硬拽回「今日」——
+       表现就是「在日记里刚设完密码，人却被弹回今日」，非常难查。
+       让 start 幂等，测试页的行为就和真机一致了。 */
+    if (started) return;
+    started = true;
+
     S.init();
     initTheme();
     bindShell();
@@ -837,7 +942,7 @@
 
   /* 界面上的版本号。改功能时和 sw.js 的 VERSION 一起改。
      手机上「改了没生效」的时候，先来这里看是不是旧版。 */
-  App.VERSION = 'v14';
+  App.VERSION = 'v15';
 
   global.App = App;
 

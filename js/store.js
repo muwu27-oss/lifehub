@@ -15,8 +15,17 @@
      以后加集合只改这一处，别再抄第二份。 */
   const COLLECTIONS = [
     'tasks', 'reviews', 'meals', 'sleep', 'weights',
-    'txns', 'txnRules', 'customFoods', 'imports', 'aiLogs'
+    'txns', 'txnRules', 'customFoods', 'imports', 'aiLogs',
+    /* 日记模块：内容和上面这些一样，**只在本地加密存储**。
+       照样登记在这里，是为了让「换设备」这条路自动带上它们 ——
+       备份走的是通用机制，不为日记单独开一条路，
+       否则就会重演「两份清单各自演化、悄悄丢数据」。 */
+    'diaryEntries', 'diaryChats', 'diaryDigests'
   ];
+
+  /* 日记的三个集合单独列一份，给 importAll 做「密码冲突」判断用。
+     用 COLLECTIONS 过滤也能得到，但显式写出来读起来更清楚。 */
+  const DIARY_COLLS = ['diaryEntries', 'diaryChats', 'diaryDigests'];
 
   /* ───────── 分类定义 ───────── */
   const CATS = {
@@ -107,6 +116,41 @@
         importedAt: null,
         source: ''            // 'ocr' | 'manual' | 'text'
       },
+      /* ───── 日记模块 ─────
+         加密参数必须放在 settings 里，**不能另起一个顶层对象**。
+         原因：importAll() 会合并 settings 和 COLLECTIONS 里的数组，
+         但不会搬运别的顶层字段。盐如果不在备份里带走，
+         换设备后密文还在、密钥参数没了 —— 那些日记将**永远解不开**，
+         这比直接丢掉还糟，因为文件看着是完整的。 */
+      diary: {
+        enabled: false,        // 设过密码没有
+        salt: '',              // base64，16 字节随机盐（每个日记库一份）
+        verifier: null,        // {iv, ct}：拿它验证密码对不对
+        iterations: 200000,    // PBKDF2 迭代次数
+        createdAt: null,
+        /* 离开日记后自动锁定（分钟）。0 = 不自动锁 */
+        autoLockMinutes: 5,
+        /* 让 AI 评价时参考客观数据。日记本身是主观的，
+           配上作息/饮食/任务/账目，AI 才看得出「你自己没意识到的事」。 */
+        useContext: true,
+        useContextParts: { sleep: true, meals: true, tasks: true, money: true, weight: true }
+      },
+
+      /* 日记的 AI 独立配置 —— 用户明确要求「这个版块的 api 需要重新单独配置」。
+         为什么值得单独配：外层那个 Key 是给「识别课表 / 查食物热量」这类
+         事务性任务用的，用便宜快的模型就够；
+         日记里的谈话是长文本、要共情、要记得住上下文，
+         值得单独换一个更强的模型，也更方便你单独控制这块花多少钱。 */
+      diaryAi: {
+        enabled: false,
+        provider: 'dashscope',
+        baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        apiKey: '',
+        model: 'qwen3.8-max',
+        temperature: 0.85,     // 聊天要有点人味，比外层的事务性 0.6 高
+        maxTokens: 2000
+      },
+
       /* AI */
       ai: {
         enabled: false,
@@ -157,6 +201,13 @@
       customFoods: [],  // AI 查过/识别过的食物（补内置库的不足）
       imports: [],      // 每次账单导入的留痕：什么时候、走哪条路、导了哪些日期
       aiLogs: [],       // AI 评价历史
+      /* ── 日记模块：存的全是密文 ──
+         {id, date, iv, ct, createdAt, updatedAt}
+         date 是明文（要按日期取区间，不解密就得能筛），
+         心情、正文、谈话、小结全在 ct 里。 */
+      diaryEntries: [],
+      diaryChats: [],   // {id, gran, key, iv, ct, ...} 一次「谈话」
+      diaryDigests: [], // {id, gran, key, iv, ct, ...} 一次「小结」
       settings: defaultSettings(),
       meta: { created: new Date().toISOString(), lastImport: null }
     };
@@ -807,8 +858,36 @@
         return { mode: 'replace' };
       }
       const counts = {};
+
+      /* ───── 先决定日记要不要收 ─────
+         日记是密文，只有「同一把钥匙」才有意义。
+         两台设备各自设过不同的密码 = 两份不同的 salt，
+         硬合并进来会得到一串**永远解不开、但看起来完好**的记录 ——
+         用户不会发现，直到某天去翻那篇日记。所以宁可当场拒绝并告诉他。 */
+      const incomingDiary = obj.settings && obj.settings.diary;
+      const localDiary = (db.settings && db.settings.diary) || {};
+      const incomingHasData = DIARY_COLLS.some(c => Array.isArray(obj[c]) && obj[c].length);
+      let diaryOutcome = 'none';     // none | merged | adopted | conflict
+
+      if (incomingDiary && incomingDiary.salt) {
+        if (!localDiary.salt || !localDiary.enabled) {
+          diaryOutcome = 'adopted';                    // 本机还没建过日记库 → 整套采纳
+        } else if (localDiary.salt === incomingDiary.salt) {
+          diaryOutcome = 'merged';                     // 同一个密码 → 正常合并
+        } else if (!incomingHasData) {
+          diaryOutcome = 'merged';                     // 备份里只有参数没内容 → 跟着走就行
+        } else {
+          const localHasData = DIARY_COLLS.some(c => Array.isArray(db[c]) && db[c].length);
+          /* 本机设过密码但一篇都没写 → 采纳备份的（备份才是真有内容的那个）。
+             两边都有内容且密码不同 → 拒绝，绝不能混。 */
+          diaryOutcome = localHasData ? 'conflict' : 'adopted';
+        }
+      }
+
       COLLECTIONS.forEach(coll => {
         if (!Array.isArray(obj[coll])) return;
+        /* 密码冲突时，日记的三个集合一笔都不进 */
+        if (diaryOutcome === 'conflict' && DIARY_COLLS.indexOf(coll) >= 0) return;
         if (!Array.isArray(db[coll])) db[coll] = [];
         const seen = new Set(db[coll].map(x => x.id));
         let n = 0;
@@ -820,13 +899,43 @@
         });
         counts[coll] = n;
       });
-      if (obj.settings) db.settings = deepMerge(db.settings, obj.settings);
+
+      if (obj.settings) {
+        /* 日记的加密参数必须**整套采纳或整套不动**，
+           不能让 deepMerge 把两边的 salt / verifier 拌在一起 ——
+           混出来的参数解不开任何一边的密文。所以先摘出来单独处理。 */
+        const rest = Object.assign({}, obj.settings);
+        delete rest.diary;
+        db.settings = deepMerge(db.settings, rest);
+
+        if (incomingDiary) {
+          if (diaryOutcome === 'conflict') {
+            db.settings.diary = localDiary;            // 保持本机原样，一个字都不动
+          } else if (diaryOutcome === 'adopted') {
+            const keepPref = { autoLockMinutes: localDiary.autoLockMinutes,
+                               useContext: localDiary.useContext,
+                               useContextParts: localDiary.useContextParts };
+            db.settings.diary = Object.assign({}, localDiary, incomingDiary, keepPref);
+            /* salt / verifier / enabled / iterations 必须是备份侧的一整套 */
+            ['salt', 'verifier', 'enabled', 'iterations', 'createdAt'].forEach(k => {
+              if (incomingDiary[k] !== undefined) db.settings.diary[k] = incomingDiary[k];
+            });
+          } else {
+            /* 同密码：加密参数保持本机，其余偏好跟随备份 */
+            const keepCrypto = { salt: localDiary.salt, verifier: localDiary.verifier,
+                                 enabled: localDiary.enabled, iterations: localDiary.iterations,
+                                 createdAt: localDiary.createdAt };
+            db.settings.diary = Object.assign({}, localDiary, incomingDiary, keepCrypto);
+          }
+        }
+      }
+
       /* meta 也要带过来：lastImport 决定了「导入记录」卡片里的引用是否还对得上 */
       if (obj.meta && typeof obj.meta === 'object') {
         db.meta = Object.assign({}, db.meta, obj.meta);
       }
       saveNow();
-      return { mode: 'merge', counts };
+      return { mode: 'merge', counts, diary: diaryOutcome };
     },
 
     reset() { db = defaultDB(); saveNow(); },
@@ -868,6 +977,17 @@
         return k.length > 10 && !/替换/.test(k);
       },
       fill: () => { S.settings.ai.apiKey = ''; }
+    },
+    {
+      key: 'diaryApiKey',
+      label: '日记的 AI Key（单独一套）',
+      where: '长按「今天」→ 日记 → 设置 → 日记的 AI',
+      hint: '日记的 AI 是独立配置的，不填就用不了「谈话」和「小结」',
+      done: () => {
+        const k = String((S.settings.diaryAi || {}).apiKey || '').trim();
+        return k.length > 10 && !/替换/.test(k);
+      },
+      fill: () => { S.settings.diaryAi.apiKey = S.settings.pending.apiKey; }
     },
     {
       key: 'weight',
