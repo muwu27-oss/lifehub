@@ -137,7 +137,18 @@
         const v = attrs[k];
         if (v == null || v === false) continue;
         if (k === 'class') node.className = v;
-        else if (k === 'html') node.innerHTML = v;
+/* html 允许传「节点数组」。
+           踩过的坑：help 页的 mdInline() 返回的是 [字符串, <strong>节点, 字符串]，
+           直接 innerHTML = 数组 会走 Array.toString()，页面上就出现字面的
+           「[object HTMLElement]」。数组按子节点挂，字符串才当 HTML 解析。 */
+        else if (k === 'html') {
+          if (Array.isArray(v)) {
+            v.forEach(c => {
+              if (c == null || c === false) return;
+              node.appendChild(typeof c === 'object' ? c : document.createTextNode(String(c)));
+            });
+          } else node.innerHTML = v;
+        }
         else if (k === 'text') node.textContent = v;
         else if (k === 'style' && typeof v === 'object') Object.assign(node.style, v);
         else if (k.startsWith('on') && typeof v === 'function') node.addEventListener(k.slice(2), v);

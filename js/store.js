@@ -144,6 +144,7 @@
       txns: [],         // 账本流水
       txnRules: [],     // 账本分类规则
       customFoods: [],  // AI 查过/识别过的食物（补内置库的不足）
+      imports: [],      // 每次账单导入的留痕：什么时候、走哪条路、导了哪些日期
       aiLogs: [],       // AI 评价历史
       settings: defaultSettings(),
       meta: { created: new Date().toISOString(), lastImport: null }
@@ -165,7 +166,7 @@
         const base = defaultDB();
         db = Object.assign(base, parsed);
         db.settings = deepMerge(defaultSettings(), parsed.settings || {});
-        ['tasks', 'reviews', 'meals', 'sleep', 'weights', 'txns', 'txnRules', 'customFoods', 'aiLogs'].forEach(k => {
+        ['tasks', 'reviews', 'meals', 'sleep', 'weights', 'txns', 'txnRules', 'customFoods', 'imports', 'aiLogs'].forEach(k => {
           if (!Array.isArray(db[k])) db[k] = [];
         });
       } else {
@@ -273,6 +274,49 @@
       });
       save();
       return items.length;
+    },
+
+    /* ───── 账单导入留痕 ─────
+       为什么记这个：截图导入是「一屏一屏」导的，过几天再截，
+       很容易忘记上次截到哪儿，结果要么漏一段、要么重复截。
+       所以每导一次都记一笔：什么时候、走哪条路、覆盖了哪段日期。 */
+
+    /** 记一次导入。txns 是这次真正入库的记录 */
+    recordImport(info) {
+      const list = (info && info.txns) || [];
+      const dates = list.map(t => String(t.date || '').slice(0, 10)).filter(Boolean).sort();
+      const rec = {
+        id: U.uid('im_'),
+        at: new Date().toISOString(),          // 导入时刻，精确到秒（显示取到小时）
+        via: (info && info.via) || '未知方式',
+        count: list.length,
+        images: (info && info.images) || 0,     // 截图识别用了几张
+        expense: U.round(list.filter(t => t.type === 'expense')
+          .reduce((a, t) => a + t.amount, 0), 2),
+        income: U.round(list.filter(t => t.type === 'income')
+          .reduce((a, t) => a + t.amount, 0), 2),
+        from: dates[0] || null,                 // 这批流水里最早 / 最晚的日期
+        to: dates[dates.length - 1] || null,
+        createdAt: new Date().toISOString()
+      };
+      if (!db.imports) db.imports = [];
+      db.imports.push(rec);
+      /* 只留最近 50 次，免得一年后拖慢加载 */
+      if (db.imports.length > 50) db.imports = db.imports.slice(-50);
+      db.meta.lastImport = rec.at;
+      save();
+      return rec;
+    },
+
+    /** 最近的导入记录，新的在前 */
+    importLogs(limit) {
+      const l = (db.imports || []).slice().reverse();
+      return limit ? l.slice(0, limit) : l;
+    },
+
+    lastImport() {
+      const l = db.imports || [];
+      return l.length ? l[l.length - 1] : null;
     },
 
     /* ───── 任务查询 ───── */

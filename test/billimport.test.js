@@ -260,6 +260,68 @@ const dd = WeChat.dedupe(S.all('txns'), batch2);
 eq('第二次导入全部判为重复', dd.fresh.length, 0);
 eq('重复计数正确', dd.dupes.length, 1);
 
+
+/* ═══════════════════════════════════
+   五、导入留痕（每次导入记下时间与覆盖到的日期）
+
+   为什么要有：截图导入是一屏一屏导的，过几天再截很容易忘记
+   上次截到哪儿，要么漏一段、要么重复截。所以要留下痕迹。
+   ═══════════════════════════════════ */
+console.log('\n═══ 导入留痕 ═══');
+S.init(); S.reset();
+
+eq('初始没有留痕', S.importLogs().length, 0);
+eq('初始 lastImport 为空', S.lastImport(), null);
+
+const rec = S.recordImport({ via: '截图识别', images: 3, txns: [
+  { date: '2026-09-29', type: 'expense', amount: 32 },
+  { date: '2026-09-30', type: 'income', amount: 200 },
+  { date: '2026-09-28', type: 'expense', amount: 18.5 }
+]});
+eq('留痕计入集合', S.importLogs().length, 1);
+eq('笔数正确', rec.count, 3);
+eq('图片张数正确', rec.images, 3);
+eq('最早日期取自这批流水', rec.from, '2026-09-28');
+eq('最晚日期取自这批流水', rec.to, '2026-09-30');
+eq('支出合计', rec.expense, 50.5);
+eq('收入合计', rec.income, 200);
+ok('留痕带 ISO 时间戳', /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(rec.at), rec.at);
+ok('meta.lastImport 同步更新', S.lastImport().at === rec.at);
+
+/* 传入顺序不影响 from/to（内部排过序） */
+const rec2 = S.recordImport({ via: 'CSV', txns: [
+  { date: '2026-09-05', type: 'expense', amount: 10 },
+  { date: '2026-09-01', type: 'expense', amount: 20 }
+]});
+eq('乱序输入也能取到最早', rec2.from, '2026-09-01');
+eq('乱序输入也能取到最晚', rec2.to, '2026-09-05');
+eq('没传 images 时为 0', rec2.images, 0);
+
+/* 新的在前 */
+const logs = S.importLogs();
+eq('importLogs 新的在前', logs[0].via, 'CSV');
+eq('importLogs 第二条是旧的', logs[1].via, '截图识别');
+eq('lastImport 就是最后写入的那条', S.lastImport().via, 'CSV');
+eq('importLogs(1) 只取一条', S.importLogs(1).length, 1);
+
+/* 空批次不该炸：没有流水时 from/to 是 null，而不是 'undefined' */
+const rec3 = S.recordImport({ via: '空', txns: [] });
+eq('空批次笔数为 0', rec3.count, 0);
+eq('空批次 from 为 null', rec3.from, null);
+eq('空批次 to 为 null', rec3.to, null);
+eq('空批次金额为 0', rec3.expense, 0);
+
+/* 上限：只留最近 50 条，避免一年后越滚越大 */
+for (let i = 0; i < 60; i++) {
+  S.recordImport({ via: '批量' + i, txns: [{ date: '2026-01-01', type: 'expense', amount: 1 }] });
+}
+ok('留痕条数被压到 50 以内', S.importLogs().length <= 50, '实际 ' + S.importLogs().length);
+eq('留下的是最新的那条', S.lastImport().via, '批量59');
+
+/* 重置后清空 */
+S.reset();
+eq('reset 后留痕清空', S.importLogs().length, 0);
+
 console.log('\n══════════════');
 console.log('结果: ' + pass + ' 通过, ' + fail + ' 失败');
 process.exit(fail ? 1 : 0);

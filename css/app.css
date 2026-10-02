@@ -139,7 +139,10 @@ ul { margin: 0; padding: 0; list-style: none; }
   height: calc(var(--tabbar-h) + var(--safe-bottom));
   padding-bottom: var(--safe-bottom);
   padding-left: var(--safe-left); padding-right: var(--safe-right);
-  display: grid; grid-template-columns: repeat(5, 1fr);
+  /* 列数跟着 tab 数量走。写死 repeat(5,1fr) 的话，加第 6 个 tab 会被
+     grid 挤到第二行 —— 而 tabbar 高度固定，第二行直接被裁掉，
+     表现成「有个 tab 只剩半个图标」。 */
+  display: grid; grid-auto-flow: column; grid-auto-columns: 1fr;
   background: color-mix(in srgb, var(--bg-elev) 92%, transparent);
   backdrop-filter: saturate(180%) blur(20px);
   -webkit-backdrop-filter: saturate(180%) blur(20px);

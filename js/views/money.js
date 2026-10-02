@@ -701,8 +701,72 @@
      按「省事程度」排：截图 > 复制文字 > CSV。
      三种最终都汇到 showImportPreview，走同一套去重和规则。
      ═══════════════════════════════════════════ */
-  function openWeChatImport() {
-    const st2 = { mode: 'pick' };            // pick | photo | text | csv
+  /* ── 导入留痕：让「上次截到哪儿」一眼可见 ── */
+
+  /** 把 ISO 时间转成「今天 14:05 / 昨天 09:20 / 10-02 14:05」 */
+  function fromNow(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (isNaN(+d)) return '—';
+    const p2 = n => (n < 10 ? '0' : '') + n;
+    const hh = p2(d.getHours()) + ':' + p2(d.getMinutes());
+    const today = U.ymd(new Date());
+    const day = U.ymd(d);
+    if (day === today) return '今天 ' + hh;
+    if (day === U.ymd(U.addDays(new Date(), -1))) return '昨天 ' + hh;
+    return `${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${hh}`;
+  }
+
+  /** 最近几次导入的小卡片（没有记录就不显示） */
+  function importLogCard() {
+    let logs = [];
+    try { logs = S.importLogs(4); } catch (e) { return U.el('div', {}); }
+    if (!logs.length) return U.el('div', {});
+
+    const card = U.el('div', { class: 'card tight', style: { marginTop: '4px' } });
+    card.appendChild(U.el('div', {
+      style: {
+        fontSize: '11.5px', fontWeight: '700', color: 'var(--text-dim)',
+        marginBottom: '6px', display: 'flex', justifyContent: 'space-between'
+      }
+    }, [
+      U.el('span', { text: '📌 导入记录' }),
+      U.el('span', {
+        style: { fontWeight: '500', color: 'var(--text-faint)' },
+        text: '截图前先看一眼，别漏别重'
+      })
+    ]));
+
+    logs.forEach(l => {
+      const parts = [`${l.count} 笔`];
+      if (l.from && l.to) parts.push(l.from === l.to ? l.from : `${l.from} ~ ${l.to}`);
+      if (l.images > 1) parts.push(`${l.images} 张图`);
+      card.appendChild(U.el('div', {
+        style: {
+          display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+          fontSize: '12px', padding: '5px 0', gap: '8px'
+        }
+      }, [
+        U.el('span', { style: { fontWeight: '600', flexShrink: '0' }, text: fromNow(l.at) }),
+        U.el('span', {
+          style: { color: 'var(--text-dim)', flex: '1', minWidth: '0', textAlign: 'right' },
+          text: l.via + ' · ' + parts.join(' · ')
+        })
+      ]));
+    });
+
+    const maxTo = logs.map(l => l.to).filter(Boolean).sort().pop();
+    if (maxTo) {
+      card.appendChild(U.el('div', {
+        style: { fontSize: '11px', color: 'var(--text-faint)', marginTop: '6px', lineHeight: '1.6' },
+        text: `已覆盖到 ${maxTo}`
+      }));
+    }
+    return card;
+  }
+
+  function openWeChatImport(initialMode) {
+    const st2 = { mode: initialMode || 'pick' };   // pick | photo | text | csv
     const bodyBox = U.el('div', {});
 
     const ta = U.el('textarea', {
@@ -711,7 +775,7 @@
     });
 
     /* 统一的落地：不管哪条路，最后都进预览确认 */
-    function finish(txns, warnings, label) {
+    function finish(txns, warnings, label, extra) {
       if (!txns || !txns.length) {
         U.toast(warnings && warnings[0] ? warnings[0] : '没解析出记录', 'err');
         return;
@@ -719,41 +783,94 @@
       App.closeSheet();
       setTimeout(() => {
         App.go('money');
-        showImportPreview({ txns, warnings: warnings || [], via: label });
+        showImportPreview(Object.assign({ txns, warnings: warnings || [], via: label }, extra || {}));
       }, 280);
     }
 
-    /* ── 路线一：截图识别 ── */
+    /* ── 路线一：截图识别（最多 5 张一起） ──
+      账单页一屏只有 8~10 条，一个月要截好几张。一张一张导太折磨，
+      所以允许一次选多张，逐张识别后合并成一批。
+      注意不要加 capture:'environment' —— 加了会强制开相机、且不能多选。 */
+    const MAX_PHOTOS = 5;
+
     function doPhoto() {
-      const inp = U.el('input', { type: 'file', accept: 'image/*', capture: 'environment' });
+      const inp = U.el('input', {
+        type: 'file', accept: 'image/*', multiple: true
+      });
       inp.addEventListener('change', async () => {
-        const f = inp.files && inp.files[0];
-        if (!f) return;
-        bodyBox.innerHTML = '';
-        bodyBox.appendChild(U.el('div', {
-          style: { fontSize: '13px', color: 'var(--text-dim)', padding: '20px 2px', textAlign: 'center' },
-          text: '🤖 正在识别账单截图…（约 10~30 秒）'
-        }));
-        try {
-          const dataUrl = await U.readFileAsDataURL(f);
-          const r = await AI.readBillPhoto(dataUrl);
-          /* 套规则/内置分类 */
-          const txns = r.txns.map(t => WeChat.finalizeTxn(t));
-          U.toast(`识别出 ${txns.length} 笔`, 'ok');
-          finish(txns, r.note ? [r.note] : [], '截图识别');
-        } catch (e) {
-          bodyBox.innerHTML = '';
-          bodyBox.appendChild(U.el('div', {
-            style: { fontSize: '12.5px', color: 'var(--danger)', padding: '10px 2px', lineHeight: '1.6' },
-            text: '识别失败：' + e.message
-          }));
-          bodyBox.appendChild(U.el('button', {
-            class: 'btn ghost block sm', text: '← 换别的方式',
-            onclick: () => render('pick')
-          }));
+        const files = Array.prototype.slice.call(inp.files || []);
+        if (!files.length) return;
+        const picked = files.slice(0, MAX_PHOTOS);
+        if (files.length > MAX_PHOTOS) {
+          U.toast(`一次最多 ${MAX_PHOTOS} 张，多余的已忽略`, 'err');
         }
+        await runPhotoBatch(picked);
       });
       inp.click();
+    }
+
+    async function runPhotoBatch(files) {
+      const n = files.length;
+      const progress = U.el('div', {
+        style: { fontSize: '13px', color: 'var(--text-dim)', padding: '18px 2px', textAlign: 'center' }
+      });
+      const bar = U.el('div', {
+        style: {
+          height: '6px', borderRadius: '999px', background: 'var(--bg-sunken)',
+          margin: '12px auto 0', maxWidth: '220px', overflow: 'hidden'
+        }
+      }, [U.el('div', { style: { height: '100%', width: '0%', background: 'var(--brand)' } })]);
+      const fill = bar.firstChild;
+      const setProgress = (txt, pct) => {
+        progress.textContent = txt;
+        fill.style.width = Math.round(pct * 100) + '%';
+      };
+
+      bodyBox.innerHTML = '';
+      setProgress(n > 1 ? `🤖 正在识别 1/${n} 张…` : '🤖 正在识别账单截图…（约 10~30 秒）', 0);
+      bodyBox.appendChild(progress);
+      bodyBox.appendChild(bar);
+      bodyBox.appendChild(U.el('div', {
+        style: { fontSize: '11px', color: 'var(--text-faint)', textAlign: 'center', marginTop: '10px' },
+        text: n > 1 ? `${n} 张一共要 1~2 分钟，别锁屏` : '别锁屏，识别完会自动跳到确认页'
+      }));
+
+      const all = [];
+      const problems = [];
+      let okCount = 0;
+
+      for (let i = 0; i < n; i++) {
+        setProgress(n > 1 ? `🤖 正在识别 ${i + 1}/${n} 张…` : '🤖 正在识别账单截图…', i / n);
+        try {
+          const dataUrl = await U.readFileAsDataURL(files[i]);
+          const r = await AI.readBillPhoto(dataUrl);
+          (r.txns || []).forEach(t => all.push(WeChat.finalizeTxn(t)));
+          if (r.note) problems.push(`第 ${i + 1} 张：${r.note}`);
+          okCount++;
+        } catch (e) {
+          /* 一张失败不该把整批废掉 —— 剩下几张照样识别 */
+          problems.push(`第 ${i + 1} 张识别失败：${e.message}`);
+        }
+        setProgress(n > 1 ? `🤖 已识别 ${i + 1}/${n} 张…` : '🤖 识别完成', (i + 1) / n);
+      }
+
+      if (!all.length) {
+        bodyBox.innerHTML = '';
+        bodyBox.appendChild(U.el('div', {
+          style: { fontSize: '12.5px', color: 'var(--danger)', padding: '10px 2px', lineHeight: '1.6' },
+          text: problems.length ? problems.join('\n') : '这几张里没读出交易记录'
+        }));
+        bodyBox.appendChild(U.el('button', {
+          class: 'btn ghost block sm', text: '← 换别的方式',
+          onclick: () => render('pick')
+        }));
+        return;
+      }
+
+      if (problems.length) U.toast(`${okCount}/${n} 张识别成功，有 ${problems.length} 条提示`, 'err');
+      else U.toast(`识别出 ${all.length} 笔`, 'ok');
+
+      finish(all, problems, '截图识别', { images: n });
     }
 
     /* ── 路线二：粘贴文字（本地解析，不花 token） ── */
@@ -821,7 +938,8 @@
           U.el('div', { style: { fontSize: '11.5px', color: 'var(--text-dim)', whiteSpace: 'normal' }, text: desc })
         ]);
 
-        bodyBox.appendChild(opt('📷', '截图识别', '账单页截图一张，AI 读出里面的交易。最快。', '推荐', doPhoto));
+        bodyBox.appendChild(opt('📷', '截图识别', '账单页截图，可一次选最多 5 张。最快。', '推荐',
+          () => render('photo')));
         bodyBox.appendChild(opt('📋', '粘贴文字', '账单页长按全选复制，粘到下面。不花 token。', '省钱',
           () => render('text')));
         bodyBox.appendChild(opt('📄', '导入 CSV 文件', '官方导出的完整月度账单。最全，但要走邮箱。', '',
@@ -845,8 +963,49 @@
             }
           }));
         }
+
+        bodyBox.appendChild(importLogCard());
         return;
       }
+
+      if (mode === 'photo') {
+        /* 让用户知道上次截到哪儿，免得漏一段或重复截 */
+        let coverTo = null;
+        try {
+          const logs = S.importLogs(10);
+          coverTo = logs.map(l => l.to).filter(Boolean).sort().pop() || null;
+          const last = logs[0];
+          if (coverTo && last) {
+            bodyBox.appendChild(U.el('div', {
+              class: 'card tight',
+              style: { background: 'var(--brand-soft)', border: 'none', marginBottom: '12px' }
+            }, [
+              U.el('div', {
+                style: { fontSize: '12.5px', lineHeight: '1.7', color: 'var(--brand)' },
+                text: `最近一次导入是 ${fromNow(last.at)}，账目已经覆盖到 ${coverTo}。`
+            }),
+              U.el('div', {
+                style: { fontSize: '12.5px', lineHeight: '1.7', color: 'var(--brand)', marginTop: '4px' },
+                text: `这次只截 ${coverTo} 之后（更新）的那部分就行，之前那段不用再截。`
+              })
+            ]));
+          }
+        } catch (e) { /* 没有留痕就不提示 */ }
+        bodyBox.appendChild(U.el('div', {
+          style: { fontSize: '12.5px', color: 'var(--text-dim)', lineHeight: '1.7', marginBottom: '10px' },
+          text: `在账单页一屏一屏截图，然后一次选最多 ${MAX_PHOTOS} 张。`
+              + `逐张识别后合成一批，跳过重复的。`
+        }));
+        bodyBox.appendChild(U.el('div', { class: 'row' }, [
+          U.el('button', { class: 'btn ghost grow', text: '← 返回', onclick: () => render('pick') }),
+          U.el('button', {
+            class: 'btn primary grow', text: '选择图片',
+            onclick: doPhoto
+          })
+        ]));
+        return;
+      }
+
 
       if (mode === 'text') {
         bodyBox.appendChild(U.el('div', {
@@ -897,7 +1056,7 @@
       }));
     }
 
-    render('pick');
+    render(st2.mode);
     App.sheet('导入账单', bodyBox, { autofocus: false });
   }
 
@@ -918,7 +1077,7 @@
     const box = U.el('div', {}, [
       result.via ? U.el('div', {
         style: { fontSize: '11.5px', color: 'var(--text-faint)', marginBottom: '8px' },
-        text: '来自：' + result.via
+        text: '来自：' + result.via + (result.images > 1 ? ` · ${result.images} 张` : '')
       }) : null,
       U.el('div', { class: 'stat-grid', style: { marginBottom: '14px' } }, [
         App.stat('新增', dedup.fresh.length, '笔'),
@@ -952,6 +1111,14 @@
         onclick: () => {
           if (!dedup.fresh.length) return U.toast('没有新增记录');
           S.bulkAdd('txns', dedup.fresh);
+          /* 留痕：记下这次是什么时候、走哪条路、覆盖了哪段日期。
+             下次再截账单图之前，回来瞄一眼就知道该从哪儿接着截。 */
+          try {
+            S.recordImport({
+              txns: dedup.fresh, via: result.via,
+              images: result.images || 0
+            });
+          } catch (e) { console.warn('记录导入留痕失败', e); }
           S.saveNow();
           App.closeSheet();
           App.refresh();

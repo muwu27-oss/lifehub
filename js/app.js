@@ -684,6 +684,7 @@
     U.$('#scrim').addEventListener('click', App.closeSheet);
     U.$('#btnHelp').addEventListener('click', () => App.go('help'));
     U.$('#btnSettings').addEventListener('click', App.openSettings);
+    U.$('#btnHistory').addEventListener('click', () => App.go('history'));
     U.$('#btnAi').addEventListener('click', App.openAI);
 
     // 顶部栏滚动阴影

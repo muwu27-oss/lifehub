@@ -29,7 +29,8 @@ SPECS = [
     ('help', ''),                   # 操作手册（默认只展开第一节）
     ('help', 'expand'),             # 操作手册全部展开
     ('body', 'meal-ai'),            # 饮食：AI 查食物 / 拍照入口
-    ('money', 'import'),            # 账本：三种导入入口
+    ('money', 'import'),            # 账本：三种导入入口 + 导入记录
+    ('money', 'import-photo'),      # 账本：截图识别说明页（上次截到哪儿）
     ('money', 'import-text'),       # 账本：粘贴文字
     ('money', 'import-csv'),        # 账本：CSV
     ('money', 'rules'),             # 账本分类规则

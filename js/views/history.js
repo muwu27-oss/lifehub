@@ -30,39 +30,17 @@
 
   const CAT_NAMES = { study: '通用学习', cv: 'CV·具身', life: '日常' };
 
-  /** 分数圆环 */
+  /** 分数圆环
+   *
+   *  用 App.ring（SVG），不要自己用 Charts.progress 画 canvas 再叠一层文字。
+   *  踩过的坑：Charts.progress 自己就会在圆心写「74%」，我在上面又叠了一个
+   *  「74」的 div，两个数字直接糊在一起变成一团黑；而且它的入参是 0~100，
+   *  我传了 value/100（0.74），圆弧等于没画、圆心还写着「1%」。
+   *  App.ring 只认 0~100，文字也只有一处来源，不会再重叠。 */
   function scoreRing(value, label, size) {
-    size = size || 96;
-    const wrap = U.el('div', {
-      style: { position: 'relative', width: size + 'px', height: size + 'px', flexShrink: '0' }
-    });
-    const cv = U.el('canvas', { width: size * 2, height: size * 2,
-      style: { width: size + 'px', height: size + 'px' } });
-    wrap.appendChild(cv);
-    wrap.appendChild(U.el('div', {
-      style: {
-        position: 'absolute', inset: '0', display: 'flex', flexDirection: 'column',
-        alignItems: 'center', justifyContent: 'center', pointerEvents: 'none'
-      }
-    }, [
-      U.el('div', {
-        style: { fontSize: (size * 0.3) + 'px', fontWeight: '800', letterSpacing: '-.03em', lineHeight: '1' },
-        text: value == null ? '—' : String(value)
-      }),
-      U.el('div', { style: { fontSize: '10px', color: 'var(--text-faint)', marginTop: '2px' }, text: label })
-    ]));
-    /* 画布要等挂载后再画 */
-    setTimeout(() => {
-      try {
-        if (value == null) {
-          Charts.progress(cv, 0, { color: 'var(--text-faint)', thickness: 7, track: true });
-        } else {
-          const g = History.grade(value);
-          Charts.progress(cv, value / 100, { color: TONE_COLOR[g.tone], thickness: 7, track: true });
-        }
-      } catch (e) { console.warn('画分数环失败', e); }
-    }, 0);
-    return wrap;
+    const color = value == null ? 'var(--text-faint)' : TONE_COLOR[History.grade(value).tone];
+    return App.ring(value == null ? 0 : value, size || 96, color,
+      value == null ? '—' : String(value), label);
   }
 
   /** 一行「标签 —— 值」 */

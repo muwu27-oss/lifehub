@@ -95,7 +95,11 @@ try {
 }
 ok('今日视图已渲染', (window.document.querySelector('#view-today').innerHTML || '').length > 100,
   '长度 ' + window.document.querySelector('#view-today').innerHTML.length);
-ok('底部导航有 6 个 tab', window.document.querySelectorAll('.tab').length === 6);
+ok('底部导航回到 5 个 tab（回顾已移出底栏）',
+  window.document.querySelectorAll('.tab').length === 5,
+  window.document.querySelectorAll('.tab').length + ' 个');
+/* 回顾改成顶栏入口，不能再挤在底栏里 */
+ok('顶栏有「回顾」入口', !!window.document.querySelector('#btnHistory'));
 
 /* ⚠ 关键回归：App.go() 必须给当前视图加 .active
    否则 CSS 的 .view{display:none} 会把整页藏掉 —— 真机上打开就是白屏。

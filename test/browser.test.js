@@ -83,7 +83,13 @@ ok('今日视图渲染出圆环', /class="ring"/.test(home));
 ok('今日视图渲染出内容', home.length > 5000, home.length+' 字节');
 ok('浮层默认隐藏', /id="scrim" hidden/.test(home) || /scrim"[^>]*hidden/.test(home));
 const tabCount = (home.match(/data-view="[a-z]+"/g)||[]).length;
-ok('底部导航有 6 个 tab', tabCount === 6, tabCount + ' 个');
+ok('底部导航回到 5 个 tab', tabCount === 5, tabCount + ' 个');
+ok('顶栏有「回顾」按钮', /id="btnHistory"/.test(home));
+/* 底栏列数不能写死：写死 repeat(5,1fr) 时第 6 个 tab 会被挤到第二行、被裁掉 */
+const appCss = fs.readFileSync(path.join(__dirname, '..', 'css', 'app.css'), 'utf8');
+const tabbarCss = (appCss.match(/\.tabbar\s*\{[^}]*\}/) || [''])[0];
+ok('底栏列数自适应 tab 数量', /grid-auto-flow:\s*column/.test(tabbarCss), tabbarCss.slice(0,80));
+ok('底栏没有写死列数', !/grid-template-columns:\s*repeat\(/.test(tabbarCss));
 ok('标题正确', /<title>LifeHub/.test(home));
 
 /* 2. 各视图都能渲染出内容（不是空白） */
@@ -117,12 +123,17 @@ ok('帮助页有内容', help.length > 8000, help.length+' 字节');
 /* 折叠节默认只开第一节：其他节内容不该出现 */
 const helpExp=dom('http://127.0.0.1:8777/harness-help-expand.html');
 ok('展开后内容变多', helpExp.length > help.length, help.length+' → '+helpExp.length);
-ok('展开后有 FAQ 的 23 个问题',
-   (helpExp.match(/Q：/g)||[]).length === 23, (helpExp.match(/Q：/g)||[]).length+' 条');
+ok('展开后有 FAQ 的 26 个问题',
+   (helpExp.match(/Q：/g)||[]).length === 26, (helpExp.match(/Q：/g)||[]).length+' 条');
 
 /* 行内标记必须被解析，不能留字面的星号
    （踩过的坑：表格里满屏 **顶部圆环**） */
 ok('没有字面的 ** 符号', !/\*\*/.test(helpExp), (helpExp.match(/\*\*[^*]{0,12}\*\*/g)||[]).slice(0,3).join(' | '));
+/* ⚠ 「没有 ** 」这条断言自己能骗人：mdInline 返回的是节点数组，
+   一旦被当成 innerHTML 字符串化，** 确实没了，但页面上冒出
+   字面的「[object HTMLElement]」—— 断言照样绿。所以必须单独守。 */
+ok('页面里没有 [object …]', !/\[object /.test(helpExp),
+   (helpExp.match(/.{40}\[object [^\]]*\].{20}/)||[])[0] || '');
 ok('粗体用 strong 标签渲染', (helpExp.match(/<strong>/g)||[]).length >= 10,
    (helpExp.match(/<strong>/g)||[]).length+' 个');
 
@@ -240,6 +251,54 @@ ok('空库提示没有作息记录', he.includes('没有作息记录'), '应提�
 ok('空库提示没有饮食记录', he.includes('没有饮食记录'), '应提示没记录');
 ok('空库健康度显示 —', he.includes('健康度') && he.includes('—'), '不能显示 0 分');
 ok('空库不显示 0 分的健康度', !/>0<\/div><div[^>]*>健康度/.test(he), '0 分会被误读成「很差」');
+
+/* ⚠ 回归：分数圆环不能有两个数字重叠
+   真实 bug —— 我用 Charts.progress 画 canvas（它自己会在圆心写「74%」），
+   又在上面叠了一个写「74」的 div，两个数字直接糊成一团黑；
+   而且它的入参是 0~100，我传了 value/100，圆弧等于没画、圆心写着「1%」。
+   现在改用 App.ring（SVG + 单一 .ring-text），这里守住它别再退回去。 */
+const ringCard = (hw.match(/<div class="ring"[\s\S]{0,600}?<\/div><\/div>/) || [''])[0];
+ok('健康度用的是 App.ring（SVG）', /<svg/.test(ringCard) && /class="ring-text"/.test(ringCard));
+ok('健康度圆环里没有 canvas', !/<canvas/.test(ringCard),
+   'canvas 圆心自带数字，再叠一层就会重叠');
+ok('健康度圆环只有一个数字', (ringCard.match(/ring-num/g) || []).length === 1,
+   '数到 ' + (ringCard.match(/ring-num/g) || []).length + ' 个');
+ok('圆环数字是分数本身（不是百分比符号叠分数）',
+   />74<\/div>/.test(ringCard), '期望中心是 74，实到 ' +
+   ((ringCard.match(/class="ring-num"[^>]*>([^<]*)/) || [])[1] || '?'));
+ok('圆环里没有多余的 %', !/ring-num[^>]*>\d+%/.test(ringCard),
+   '分数不该带 %，否则和标签语义冲突');
+/* 74 分要有 74% 的弧度，不是 0.74% */
+const dash = (ringCard.match(/stroke-dashoffset="([\d.]+)"/g) || []);
+ok('圆弧按 0~100 的比例画', dash.length === 2, '圆弧数量 ' + dash.length);
+
+/* ═══ 账本：截图识别一次最多 5 张 ═══ */
+const impPick = dom('http://127.0.0.1:8777/harness-money-import.html');
+ok('导入入口写清可以多选', /最多 5 张/.test(impPick), '没写清张数');
+ok('入口显示导入记录', /导入记录/.test(impPick), '没显示导入留痕');
+ok('导入记录里有时间（精确到分钟）', /今天 \d{2}:\d{2}|昨天 \d{2}:\d{2}|\d{2}-\d{2} \d{2}:\d{2}/.test(impPick),
+   '留痕没有时间');
+ok('导入记录里有覆盖到的日期', /已覆盖到 \d{4}-\d{2}-\d{2}/.test(impPick), '留痕没写覆盖范围');
+ok('剪贴板按钮还在（没被留痕卡片挤掉）', /从剪贴板粘贴/.test(impPick), '剪贴板入口丢了');
+
+const impPhoto = dom('http://127.0.0.1:8777/harness-money-import-photo.html');
+ok('截图页渲染成功', /截图/.test(impPhoto));
+ok('截图页提示上次截到哪儿', /已经覆盖到|复盖到/.test(impPhoto), '没提示上次覆盖范围');
+ok('截图页说明多选张数', /最多 5 张/.test(impPhoto));
+ok('截图页有选择图片按钮', /选择图片/.test(impPhoto));
+
+/* 文件框必须带 multiple，否则手机上只能选一张 */
+const moneySrc = fs.readFileSync(path.join(__dirname, '..', 'js', 'views', 'money.js'), 'utf8');
+/* 只看真正的那个 input 元素，别被注释里的字样骗了 */
+const imgInput = (moneySrc.match(/U\.el\('input',\s*\{[^}]*accept:\s*'image\/\*'[^}]*\}/) || [''])[0];
+ok('找得到图片文件框', imgInput.length > 0);
+ok('图片文件框允许多选', /multiple:\s*true/.test(imgInput),
+   '没有 multiple 就只能选一张');
+ok('图片文件框不强开相机', !/capture:/.test(imgInput),
+   'capture 会强制开相机且不能多选');
+ok('一次最多 5 张有常量约束', /MAX_PHOTOS\s*=\s*5/.test(moneySrc));
+ok('超过 5 张会被截断', /slice\(0,\s*MAX_PHOTOS\)/.test(moneySrc), '没有截断逻辑');
+ok('单张失败不废掉整批', /一张失败不该把整批废掉|problems\.push/.test(moneySrc));
 
 console.log('\n══════════════');
 console.log('结果: '+pass+' 通过, '+fail+' 失败');
