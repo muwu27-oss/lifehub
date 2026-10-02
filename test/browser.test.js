@@ -123,8 +123,8 @@ ok('帮助页有内容', help.length > 8000, help.length+' 字节');
 /* 折叠节默认只开第一节：其他节内容不该出现 */
 const helpExp=dom('http://127.0.0.1:8777/harness-help-expand.html');
 ok('展开后内容变多', helpExp.length > help.length, help.length+' → '+helpExp.length);
-ok('展开后有 FAQ 的 31 个问题',
-   (helpExp.match(/Q：/g)||[]).length === 31, (helpExp.match(/Q：/g)||[]).length+' 条');
+ok('展开后有 FAQ 的 32 个问题',
+   (helpExp.match(/Q：/g)||[]).length === 32, (helpExp.match(/Q：/g)||[]).length+' 条');
 
 /* 行内标记必须被解析，不能留字面的星号
    （踩过的坑：表格里满屏 **顶部圆环**） */
@@ -365,6 +365,54 @@ ok('设置里有强制更新按钮', /检查更新/.test(settingsSheet), '没有
    只能导出不能导入的备份是单向陷阱，换手机时数据就没了。 */
 ok('设置里有「导入备份」按钮', /导入备份/.test(settingsSheet), '帮助页承诺了导入，但按钮不存在');
 ok('设置里有「导出备份」按钮', /导出备份/.test(settingsSheet));
+
+/* ═══ 真点「导入备份」：换设备这条路必须真的走得通 ═══
+   备份是只有出事那天才用的功能，平时永远显示「已导出」。
+   所以这里不看函数有没有被调用，而是让用户的那一串点击真的走一遍：
+   设置页按钮 → 选文件 → 读文件 → 确认弹窗 → 点「导入」。
+   然后逐个集合比对条数，一个都不许少。 */
+const bk = dom('http://127.0.0.1:8777/harness-today-backup-import.html');
+const bkErr = pickAttr(bk, 'err');
+ok('走完导入全流程没有 JS 报错', bkErr === '无', '报了：' + bkErr);
+ok('设置页里点得到「导入备份」', /找到/.test(pickAttr(bk, 'btn-found') || ''),
+   pickAttr(bk, 'btn-found'));
+ok('App 真的造出了文件输入框', /拿到/.test(pickAttr(bk, 'input-found') || ''),
+   pickAttr(bk, 'input-found'));
+ok('选完文件弹出了确认框', /找到/.test(pickAttr(bk, 'confirm-found') || ''),
+   pickAttr(bk, 'confirm-found'));
+ok('点「导入」后提示成功', /已导入备份/.test(pickAttr(bk, 'toast') || ''),
+   'toast 是：' + pickAttr(bk, 'toast'));
+
+/* 逐个集合比对。这一段不认识具体集合名 —— 它拿 data-before / data-after
+   两份「名字:条数」直接比，所以以后加了新集合忘了登记，这里立刻红。 */
+function countMap(str) {
+  const out = {};
+  String(str || '').split(',').forEach(pair => {
+    const i = pair.indexOf(':');
+    if (i > 0) out[pair.slice(0, i)] = Number(pair.slice(i + 1));
+  });
+  return out;
+}
+const bkBefore = countMap(pickAttr(bk, 'before'));
+const bkAfter = countMap(pickAttr(bk, 'after'));
+const bkKeys = Object.keys(bkBefore);
+ok('备份里覆盖了多个集合', bkKeys.length >= 10, '只有 ' + bkKeys.length + ' 个');
+ok('先确认真的清空了（不然这条测试等于没测）',
+   bkKeys.every(k => bkBefore[k] > 0 || true) && Number(pickAttr(bk, 'cleared')) === 0,
+   'cleared = ' + pickAttr(bk, 'cleared'));
+
+const bkLost = bkKeys.filter(k => bkBefore[k] !== (bkAfter[k] === undefined ? -1 : bkAfter[k]));
+ok('导入后每个集合的条数都和备份一致（一个都没丢）',
+   bkLost.length === 0,
+   '丢了的：' + bkLost.map(k => `${k} ${bkBefore[k]}→${bkAfter[k]}`).join(', '));
+ok('确实有集合不是空的（不是空对空）',
+   bkKeys.some(k => bkBefore[k] > 0), '备份里全是 0 条，这条测试没意义');
+
+ok('设置跟着过来了（API key）',
+   /带过来了/.test(pickAttr(bk, 'apikey') || ''), pickAttr(bk, 'apikey'));
+ok('自定义食物也跟着过来了（以前会丢）',
+   (pickAttr(bk, 'food-name') || '') !== '(没了)',
+   '自定义食物是：' + pickAttr(bk, 'food-name'));
 
 const moneySrc = fs.readFileSync(path.join(__dirname, '..', 'js', 'views', 'money.js'), 'utf8');
 /* 这就是上面那个 bug 的字面成因，直接守住。

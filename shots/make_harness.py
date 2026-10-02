@@ -39,6 +39,7 @@ SPECS = [
     ('today', 'settings'),          # 设置面板（版本号 + 检查更新）
     ('money', 'edit-save'),         # 真点「更新」（回归：点了没反应）
     ('money', 'batch-save'),        # 真点「应用到 N 笔」
+    ('today', 'backup-import'),     # 真点「导入备份」走完整条换设备流程
     ('money', 'rules'),             # 账本分类规则
     ('money', 'batch'),             # 账本批量整理
 ]

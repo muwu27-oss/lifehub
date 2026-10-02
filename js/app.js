@@ -392,6 +392,16 @@
       U.el('span', { class: 'k', text: '占用' }), U.el('span', { class: 'v', text: Math.round(stats.bytes / 1024) + ' KB' })
     ]));
 
+    /* 换设备这条路要写清楚 —— 用户只有在新手机上才会想起它 */
+    body.push(U.el('div', {
+      class: 'hint',
+      style: { fontSize: '11.5px', color: 'var(--text-dim)', margin: '14px 0 0', lineHeight: 1.65 },
+      html: '<b>换设备就靠这一对按钮。</b>导出得到的是一个 JSON 文件，'
+        + '里面包含你全部的数据和设置（<b>含 AI 的 API Key，别随便发给别人</b>）。'
+        + '在新手机上打开这个网址 → 设置 → 导入备份 → 选那个文件即可。'
+        + '<br>数据只存在这台设备的浏览器里，没有云端同步，所以<b>换手机 / 清浏览器数据之前一定要先导出</b>。'
+    }));
+
     body.push(U.el('div', { class: 'row wrap', style: { marginTop: '14px' } }, [
       U.el('button', {
         class: 'btn ghost sm grow', text: '导出备份',
@@ -827,7 +837,7 @@
 
   /* 界面上的版本号。改功能时和 sw.js 的 VERSION 一起改。
      手机上「改了没生效」的时候，先来这里看是不是旧版。 */
-  App.VERSION = 'v13';
+  App.VERSION = 'v14';
 
   global.App = App;
 

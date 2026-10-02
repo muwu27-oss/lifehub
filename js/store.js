@@ -7,6 +7,17 @@
 
   const KEY = 'lifehub.v1';
 
+  /* ⚠️ 所有集合**只在这里定义一次**。
+     以前 load() 里写了一份（10 个）、importAll() 里又写了一份（7 个），
+     两份清单慢慢就对不上了 —— 结果换设备导入备份时，
+     customFoods / imports / aiLogs 三条**静默丢失**：
+     自己存的食物没了，「导入记录」没了（于是撤销导入也没了）。
+     以后加集合只改这一处，别再抄第二份。 */
+  const COLLECTIONS = [
+    'tasks', 'reviews', 'meals', 'sleep', 'weights',
+    'txns', 'txnRules', 'customFoods', 'imports', 'aiLogs'
+  ];
+
   /* ───────── 分类定义 ───────── */
   const CATS = {
     study: { id: 'study', name: '一般通用学习', short: '通用学习', color: 'var(--c-study)', hex: '#3b6ef6', desc: '学校课程 / 作业 / 考试' },
@@ -166,7 +177,7 @@
         const base = defaultDB();
         db = Object.assign(base, parsed);
         db.settings = deepMerge(defaultSettings(), parsed.settings || {});
-        ['tasks', 'reviews', 'meals', 'sleep', 'weights', 'txns', 'txnRules', 'customFoods', 'imports', 'aiLogs'].forEach(k => {
+        COLLECTIONS.forEach(k => {
           if (!Array.isArray(db[k])) db[k] = [];
         });
       } else {
@@ -796,11 +807,13 @@
         return { mode: 'replace' };
       }
       const counts = {};
-      ['tasks', 'reviews', 'meals', 'sleep', 'weights', 'txns', 'txnRules'].forEach(coll => {
+      COLLECTIONS.forEach(coll => {
         if (!Array.isArray(obj[coll])) return;
+        if (!Array.isArray(db[coll])) db[coll] = [];
         const seen = new Set(db[coll].map(x => x.id));
         let n = 0;
         obj[coll].forEach(it => {
+          if (!it || typeof it !== 'object') return;
           if (!it.id) it.id = U.uid(coll.slice(0, 2) + '_');
           if (seen.has(it.id)) return;
           db[coll].push(it); seen.add(it.id); n++;
@@ -808,6 +821,10 @@
         counts[coll] = n;
       });
       if (obj.settings) db.settings = deepMerge(db.settings, obj.settings);
+      /* meta 也要带过来：lastImport 决定了「导入记录」卡片里的引用是否还对得上 */
+      if (obj.meta && typeof obj.meta === 'object') {
+        db.meta = Object.assign({}, db.meta, obj.meta);
+      }
       saveNow();
       return { mode: 'merge', counts };
     },
