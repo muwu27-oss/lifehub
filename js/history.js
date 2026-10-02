@@ -12,7 +12,7 @@
 
    三个粒度：
      week  周一 ~ 周日（跟 U.startOfWeek 一致）
-     month 自然月；但钱的收入用错位窗口（见 S.incomeWindow）
+     month 自然月；但钱的统计窗口会错位（见 S.monthWindow，收支共用）
      year  自然年
    ═══════════════════════════════════════════════ */
 (function (global) {
@@ -223,23 +223,26 @@
 
   /* ───────── 各板块 ───────── */
 
-  /** 账本：收入用错位窗口（与 S.monthSummary 口径一致），支出用自然区间 */
+  /** 账本：收入和支出用同一个窗口（与 S.monthSummary 口径一致） */
   H.moneyOf = function (range) {
     let txns = [];
     try { txns = S.all('txns') || []; } catch (e) { return null; }
 
-    /* 收入窗口：只有「月」粒度沿用错位规则；
+    /* 统计窗口：只有「月」粒度沿用错位规则，收入和支出一起走。
        周和年用自然区间 —— 错位是为了兜住「上月最后一天提前到账」，
-       在周粒度上会把区间切得很怪，得不偿失。 */
-    let incStart = range.start, incEnd = range.end, shifted = false;
-    if (range.unit === 'month' && typeof S.incomeWindow === 'function') {
-      const w = S.incomeWindow(range.key);
-      if (w && w.shifted) { incStart = w.start; incEnd = w.end; shifted = true; }
+       在周粒度上会把区间切得很怪，得不偿失。
+       （改过：以前支出按自然区间、收入按错位窗口，两边日期范围不一样，
+         用户对账时对不上。） */
+    let winStart = range.start, winEnd = range.end, shifted = false;
+    if (range.unit === 'month' && typeof S.monthWindow === 'function') {
+      const w = S.monthWindow(range.key);
+      if (w && w.shifted) { winStart = w.start; winEnd = w.end; shifted = true; }
     }
+    const win = { start: winStart, end: winEnd };
 
     const isIncome = t => t.type === 'income';
-    const inc = txns.filter(t => inRange(t.date, { start: incStart, end: incEnd }) && isIncome(t));
-    const exp = txns.filter(t => inRange(t.date, range) && !isIncome(t));
+    const inc = txns.filter(t => inRange(t.date, win) && isIncome(t));
+    const exp = txns.filter(t => inRange(t.date, win) && !isIncome(t));
 
     const stipend = inc.filter(t => {
       try { return typeof S.isStipendAmount === 'function' && S.isStipendAmount(t.amount); }
@@ -277,7 +280,8 @@
       stipendCount: stipend.length, incomeCount: inc.length, expenseCount: exp.length,
       txnCount: inc.length + exp.length,
       byCategory, topPeople,
-      incomeWindow: { start: incStart, end: incEnd, shifted },
+      incomeWindow: { start: winStart, end: winEnd, shifted },
+      window: { start: winStart, end: winEnd, shifted },
       avgPerDay: range.days ? expense / range.days : null,
       /* 记账坚持度：有流水的天数 / 区间天数 */
       logRate: (() => {

@@ -322,6 +322,78 @@ eq('留下的是最新的那条', S.lastImport().via, '批量59');
 S.reset();
 eq('reset 后留痕清空', S.importLogs().length, 0);
 
+
+/* ═══════════════════════════════════
+   六、删得掉：删单笔 / 批量删 / 整批撤销
+
+   用户原话：「已经导入的明细居然无法删除。导错了怎么办」
+   截图识别一次导一批，识别歪了要一笔一笔删太痛苦，所以要有整批回滚。
+   ═══════════════════════════════════ */
+console.log('\n═══ 删除与撤销 ═══');
+S.init(); S.reset();
+
+const batch = [
+  { date: '2026-10-01', type: 'expense', amount: 10, category: '餐饮' },
+  { date: '2026-10-02', type: 'expense', amount: 20, category: '餐饮' },
+  { date: '2026-10-03', type: 'expense', amount: 30, category: '餐饮' }
+].map(t => WeChat.finalizeTxn(t));
+S.bulkAdd('txns', batch);
+S.saveNow();
+const recU = S.recordImport({ via: '截图识别', images: 2, txns: batch });
+
+eq('导入后库里 3 笔', S.all('txns').length, 3);
+eq('留痕记下了这批的 id', recU.ids.length, 3);
+eq('能撤销的笔数 = 3', S.importAlive(recU), 3);
+
+/* 手动删掉一笔，撤销的笔数要跟着变少 */
+const gone = S.remove('txns', batch[0].id);
+S.saveNow();
+eq('单笔删除成功', gone, true);
+eq('库里剩 2 笔', S.all('txns').length, 2);
+eq('可撤销笔数跟着变成 2', S.importAlive(recU), 2);
+
+/* 删不存在的 id 不该炸、也不该算数 */
+eq('删不存在的 id 返回 false', S.remove('txns', 'txn_不存在'), false);
+
+/* 撤销整批 */
+const removed = S.undoImport(recU.id);
+eq('撤销删掉 2 笔（剩下实际还在的）', removed, 2);
+eq('库里清空', S.all('txns').length, 0);
+eq('留痕也一并移除', S.importLogs().length, 0);
+eq('重复撤销返回 0（不炸）', S.undoImport(recU.id), 0);
+
+/* 批量删除 */
+S.reset();
+const many = [1, 2, 3, 4].map(i => WeChat.finalizeTxn(
+  { date: '2026-10-0' + i, type: 'expense', amount: i * 10, category: '餐饮' }));
+S.bulkAdd('txns', many);
+S.saveNow();
+eq('批量前 4 笔', S.all('txns').length, 4);
+eq('removeMany 返回删掉的 2 笔', S.removeMany('txns', [many[0].id, many[1].id]), 2);
+eq('批量后剩 2 笔', S.all('txns').length, 2);
+eq('removeMany 空数组返回 0', S.removeMany('txns', []), 0);
+eq('removeMany 未知集合返回 0', S.removeMany('不存在', ['x']), 0);
+
+/* 老留痕没有 ids（这次改动之前导入的），要能安全降级 */
+S.reset();
+/* 真实流程是 bulkAdd 之后再 recordImport —— id 是 bulkAdd 发的。
+   直接塞裸对象是没有 id 的，那种留痕不可撤销（下面单独验）。 */
+const one = WeChat.finalizeTxn({ date: '2026-09-01', type: 'expense', amount: 5, category: '餐饮' });
+S.bulkAdd('txns', [one]);
+S.saveNow();
+const recNew = S.recordImport({ via: 'CSV', txns: [one] });
+eq('新留痕有 ids', recNew.ids.length, 1);
+eq('新留痕可撤销', S.importAlive(recNew), 1);
+
+/* 裸对象（没有 id）不该产出垃圾 id，更不该让撤销算错数 */
+S.reset();
+const naked = S.recordImport({ via: 'CSV', txns: [
+  { date: '2026-09-01', type: 'expense', amount: 5, category: '餐饮' }] });
+eq('裸对象不产出 id', naked.ids.length, 0);
+const legacy = Object.assign({}, naked, { ids: undefined });
+eq('没有 ids 的老留痕不可撤销', S.importAlive(legacy), 0);
+eq('撤销没有 ids 的留痕返回 0', S.undoImport(legacy.id), 0);
+
 console.log('\n══════════════');
 console.log('结果: ' + pass + ' 通过, ' + fail + ' 失败');
 process.exit(fail ? 1 : 0);

@@ -175,7 +175,7 @@
       U.el('div', { style: { fontSize: '12px', color: 'var(--text-dim)', marginTop: '-4px' } },
         [`本月收入 ${U.money(ms.income)}`
          + (ms.stipend ? `（生活费 ${U.money(ms.stipend)}` + (ms.extra ? ` + 额外 ${U.money(ms.extra)}）` : '）') : '')
-         + ` · ${ms.incomeWindow.start.slice(5)} ~ ${ms.incomeWindow.end.slice(5)}`])
+         + ` · ${ms.window.start.slice(5)} ~ ${ms.window.end.slice(5)}`])
     ]));
   };
 

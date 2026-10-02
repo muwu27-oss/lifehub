@@ -301,10 +301,10 @@
     card.appendChild(kv('额外收入', money(m.extra), `${m.incomeCount - m.stipendCount} 笔`));
     card.appendChild(kv('记账覆盖', Math.round(m.logRate * 100) + '%',
       `${m.range ? '' : ''}${m.txnCount} 笔流水`));
-    if (m.incomeWindow && m.incomeWindow.shifted) {
+    if (m.window && m.window.shifted) {
       card.appendChild(U.el('div', {
         style: { fontSize: '10.5px', color: 'var(--text-faint)', marginTop: '7px', lineHeight: '1.6' },
-        text: `收入按错位窗口统计：${m.incomeWindow.start} ~ ${m.incomeWindow.end}`
+        text: `收支都按错位窗口统计：${m.window.start} ~ ${m.window.end}`
       }));
     }
     box.appendChild(card);

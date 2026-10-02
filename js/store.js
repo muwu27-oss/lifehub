@@ -290,6 +290,9 @@
         at: new Date().toISOString(),          // 导入时刻，精确到秒（显示取到小时）
         via: (info && info.via) || '未知方式',
         count: list.length,
+        /* 这批入库记录的 id。留着是为了「撤销这次导入」——
+           识别错了要一笔一笔删太痛苦，整批回滚才是正解。 */
+        ids: list.map(t => t.id).filter(Boolean),
         images: (info && info.images) || 0,     // 截图识别用了几张
         expense: U.round(list.filter(t => t.type === 'expense')
           .reduce((a, t) => a + t.amount, 0), 2),
@@ -317,6 +320,39 @@
     lastImport() {
       const l = db.imports || [];
       return l.length ? l[l.length - 1] : null;
+    },
+
+    /** 批量删除。返回真正删掉的条数。
+     *  一次 save()，避免循环调 remove() 触发 N 次落盘 + N 次刷新。 */
+    removeMany(coll, ids) {
+      if (!Array.isArray(db[coll]) || !ids || !ids.length) return 0;
+      const set = {};
+      ids.forEach(id => { if (id) set[id] = true; });
+      const before = db[coll].length;
+      db[coll] = db[coll].filter(x => !set[x.id]);
+      const n = before - db[coll].length;
+      if (n) save();
+      return n;
+    },
+
+    /** 这次导入现在还能撤销吗（还有多少笔在库里）。
+     *  用户可能已经手动删过几笔，所以按「实际还在的数量」算。 */
+    importAlive(rec) {
+      if (!rec || !rec.ids || !rec.ids.length) return 0;
+      const set = {};
+      rec.ids.forEach(id => { set[id] = true; });
+      return (db.txns || []).filter(t => set[t.id]).length;
+    },
+
+    /** 撤销某一次导入：把这批流水整批删掉，并移除这条留痕。
+     *  返回真正删掉的笔数（可能少于当初导入的，因为中间手动删过）。 */
+    undoImport(recId) {
+      const rec = (db.imports || []).find(r => r.id === recId);
+      if (!rec) return 0;
+      const n = S.removeMany('txns', rec.ids || []);
+      db.imports = (db.imports || []).filter(r => r.id !== recId);
+      save();
+      return n;
     },
 
     /* ───── 任务查询 ───── */
@@ -530,7 +566,16 @@
     weightLatest() { return db.weights.length ? db.weights[db.weights.length - 1] : null; },
 
     /* ───── 账本 ───── */
-    txnsInMonth(ym) { return db.txns.filter(t => (t.date || '').slice(0, 7) === ym); },
+    /** 某个月的流水。**按统计窗口取，不是自然月前缀。**
+     *  窗口见 S.monthWindow()：默认 上月最后一天 ~ 本月倒数第二天。
+     *  列表、计数、分类统计、AI 提示词都走这里，保证「看得到的就是算进去的」。 */
+    txnsInMonth(ym) {
+      const w = S.monthWindow(ym);
+      return db.txns.filter(t => {
+        const d = (t.date || '').slice(0, 10);
+        return d && d >= w.start && d <= w.end;
+      });
+    },
 
     /** 账本里出现过的所有「用途」标签（去重、按出现次数排）。
      *  用途是自由文本（如「这个月房租」「给妹妹生活费」），
@@ -608,6 +653,10 @@
     },
 
     monthSummary(ym) {
+      /* 收入和支出用**同一个**窗口。
+         之前支出按自然月，结果「10 月支出」和「10 月收入」覆盖的日期不一样，
+         对不上账。现在统一成 S.monthWindow()。 */
+      const win = S.monthWindow(ym);
       const list = S.txnsInMonth(ym);
       const expense = U.sum(list.filter(t => t.type === 'expense'), t => t.amount);
       const inc = S.monthIncome(ym);
@@ -628,14 +677,17 @@
         stipendCount: inc.stipendCount,
         extraCount: inc.extraCount,
         referenceIncome: inc.reference,
-        incomeWindow: inc.window
+        window: win,
+        incomeWindow: win            // 兼容旧名字：income 和 expense 现在是同一个窗口
       };
     },
 
-    /** 某个月的收入窗口 [start, end]（含两端）。
+    /** 某个月的**统计窗口** [start, end]（含两端）。
+     *  收入和支出都用它。
      *  默认错位：上个月最后一天 ~ 本月倒数第二天。
-     *  理由：生活费常在上月底提前打进来，那笔其实属于下个月。 */
-    incomeWindow(ym) {
+     *  理由：生活费常在上月底提前打进来，那笔其实属于下个月；
+     *  支出跟着同一个窗口走，两边才对得上账。 */
+    monthWindow(ym) {
       const shift = S.settings.money.incomeWindowShift !== false;
       const [y, m] = String(ym).split('-').map(Number);
       if (!shift) {
@@ -649,6 +701,9 @@
       const lastDay = new Date(y, m, 0).getDate();
       return { start: startStr, end: `${ym}-${U.pad(lastDay - 1)}`, shifted: true };
     },
+
+    /** 旧名字，等价于 monthWindow。保留是为了不破坏已有调用。 */
+    incomeWindow(ym) { return S.monthWindow(ym); },
 
     /** 这笔金额算不算「固定生活费」。
      *  用户设定：每月 1500 分两次各 750 到账，所以 750 是敏感数字。
@@ -664,7 +719,7 @@
 
     /** 某个月的收入统计（含固定生活费 / 额外收入的拆分）。 */
     monthIncome(ym) {
-      const win = S.incomeWindow(ym);
+      const win = S.monthWindow(ym);
       const all = db.txns.filter(t => t.type === 'income');
       const inWin = all.filter(t => {
         const d = (t.date || '').slice(0, 10);

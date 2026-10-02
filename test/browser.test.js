@@ -123,8 +123,8 @@ ok('帮助页有内容', help.length > 8000, help.length+' 字节');
 /* 折叠节默认只开第一节：其他节内容不该出现 */
 const helpExp=dom('http://127.0.0.1:8777/harness-help-expand.html');
 ok('展开后内容变多', helpExp.length > help.length, help.length+' → '+helpExp.length);
-ok('展开后有 FAQ 的 26 个问题',
-   (helpExp.match(/Q：/g)||[]).length === 26, (helpExp.match(/Q：/g)||[]).length+' 条');
+ok('展开后有 FAQ 的 27 个问题',
+   (helpExp.match(/Q：/g)||[]).length === 27, (helpExp.match(/Q：/g)||[]).length+' 条');
 
 /* 行内标记必须被解析，不能留字面的星号
    （踩过的坑：表格里满屏 **顶部圆环**） */
@@ -305,6 +305,26 @@ const impToPhoto = dom('http://127.0.0.1:8777/harness-money-import-to-photo.html
 ok('点「导入账单 → 截图识别」能到截图页', /选择图片/.test(impToPhoto),
    '两下点击没能进入截图页');
 ok('截图页提示上次覆盖范围', /已经覆盖到/.test(impToPhoto));
+
+/* ═══ 删除得起：按钮不能被长表单埋掉 ═══
+   用户原话：「已经导入的明细居然无法删除。导错了怎么办」。
+   「删除」本来就在，但在表单最底下，手机上要滑三屏才看得到。
+   现在放进 .sheet-foot 固定底栏，永远贴在底部。 */
+const editSheet = dom('http://127.0.0.1:8777/harness-money-edit.html');
+const editFoot = (editSheet.match(/<div class="sheet-foot">[\s\S]*?<\/div><\/div><\/div>/) || [''])[0];
+ok('单笔编辑有固定底栏', /sheet-foot/.test(editSheet), '没有固定底栏，删除按钮又被埋了');
+ok('固定底栏里有删除', /删除/.test(editFoot), '底栏里看不到删除');
+ok('固定底栏里有更新', /更新/.test(editFoot), '底栏里看不到更新');
+ok('删除按钮不在滚动区里',
+   !/<div class="sheet-body">[\s\S]*删除[\s\S]*<\/div><div class="sheet-foot">/.test(editSheet),
+   '删除还在 sheet-body 里，得滚动才看得到');
+
+const batchSheet = dom('http://127.0.0.1:8777/harness-money-batch.html');
+ok('批量整理有固定底栏', /sheet-foot/.test(batchSheet));
+ok('批量整理底栏有删除', /删除 3 笔/.test(batchSheet), '批量面板没有删除入口');
+
+/* 导入记录每行要有「撤销」——导错一整批时不用一笔一笔删 */
+ok('导入记录有撤销按钮', /撤销/.test(impPick), '没有整批撤销的入口');
 
 const moneySrc = fs.readFileSync(path.join(__dirname, '..', 'js', 'views', 'money.js'), 'utf8');
 /* 这就是上面那个 bug 的字面成因，直接守住。

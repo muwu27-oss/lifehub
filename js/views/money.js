@@ -105,7 +105,7 @@
     const incCard = U.el('div', { class: 'card tight', style: { marginTop: '12px' } });
     incCard.appendChild(U.el('div', { class: 'card-head', style: { marginBottom: '8px' } }, [
       U.el('h3', { text: '💰 收入明细' }),
-      U.el('span', { class: 'hint', text: s.incomeWindow.shifted ? '含上月最后一天' : '自然月' })
+      U.el('span', { class: 'hint', text: s.window.shifted ? '含上月最后一天' : '自然月' })
     ]));
     incCard.appendChild(U.el('div', { class: 'stat-grid' }, [
       App.stat('固定生活费', U.money(s.stipend), '元', `${s.stipendCount} 笔`),
@@ -139,8 +139,8 @@
 
     incCard.appendChild(U.el('div', {
       style: { fontSize: '11px', color: 'var(--text-faint)', marginTop: '8px', lineHeight: '1.6' },
-      text: `收入窗口 ${s.incomeWindow.start} ~ ${s.incomeWindow.end}`
-          + `（生活费常在上月底提前到账，所以收入范围比自然月错开一天；支出仍按自然月）`
+      text: `统计窗口 ${s.window.start} ~ ${s.window.end}（收入和支出都按这个范围）`
+          + `　生活费常在上月底提前到账，所以范围比自然月错开一天。`
     }));
     root.appendChild(incCard);
 
@@ -386,7 +386,25 @@
         ])
       ]));
 
-      box.appendChild(U.el('div', { class: 'row', style: { marginTop: '16px' } }, [
+    }
+
+    /* 固定底栏：删除 / 应用 常驻可见，不随长表单滚走 */
+    function buildActions() {
+      return U.el('div', { class: 'row', style: { width: '100%' } }, [
+        /* 删掉选中的：导错一批时，「删」比「改分类」更常用 */
+        U.el('button', {
+          class: 'btn danger', style: { flexShrink: '0' },
+          text: `删除 ${picked.length} 笔`,
+          onclick: () => {
+            App.confirm(`删除这 ${picked.length} 笔记录？删了找不回来。`, () => {
+              const n = S.removeMany('txns', picked.map(t => t.id));
+              S.saveNow();
+              App.closeSheet();
+              U.toast(`已删除 ${n} 笔`, 'ok');
+              if (onDone) onDone();
+            }, '删除');
+          }
+        }),
         U.el('button', {
           class: 'btn primary grow', text: `应用到 ${picked.length} 笔`,
           onclick: () => {
@@ -408,10 +426,13 @@
             if (onDone) onDone();
           }
         })
-      ]));
+      ]);
     }
     rebuild();
-    App.sheet(`批量整理 ${picked.length} 笔`, box, { autofocus: false });
+    App.sheet(`批量整理 ${picked.length} 笔`, box, {
+      autofocus: false,
+      footer: buildActions()
+    });
   }
 
   /* ═══════════ 分类规则 ═══════════ */
@@ -658,11 +679,20 @@
         ]));
       }
 
-      box.appendChild(U.el('div', { class: 'row', style: { marginTop: '16px' } }, [
+      /* 操作按钮不放在这里 —— 它们在下面的固定底栏里（App.sheet 的 footer）。
+         原来放在表单最底下，手机上要滑三屏才看得到「删除」，
+         用户以为这笔记录根本删不掉。 */
+      box.appendChild(U.el('div', { style: { height: '4px' } }));
+    }
+
+    /* 固定底栏：删除 / 更新 常驻可见 */
+    function buildActions() {
+      return U.el('div', { class: 'row', style: { width: '100%' } }, [
         isNew ? null : U.el('button', {
-          class: 'btn danger', text: '删除',
-          onclick: () => App.confirm('删除这笔记录？', () => {
+          class: 'btn danger', style: { flexShrink: '0' }, text: '删除',
+          onclick: () => App.confirm('删除这笔记录？删了找不回来。', () => {
             S.remove('txns', t.id); App.closeSheet(); App.refresh();
+            U.toast('已删除', 'ok');
           }, '删除')
         }),
         U.el('button', {
@@ -692,11 +722,14 @@
               : '已保存', 'ok');
           }
         })
-      ]));
+      ]);
     }
 
     rebuild();
-    App.sheet(isNew ? '记一笔' : '编辑记录', box, { autofocus: false });
+    App.sheet(isNew ? '记一笔' : '编辑记录', box, {
+      autofocus: false,
+      footer: buildActions()
+    });
   }
 
   /* ═══════════ 微信账单导入 ═══════════ */
@@ -744,9 +777,12 @@
       const parts = [`${l.count} 笔`];
       if (l.from && l.to) parts.push(l.from === l.to ? l.from : `${l.from} ~ ${l.to}`);
       if (l.images > 1) parts.push(`${l.images} 张图`);
+      /* 还能撤销多少笔（用户可能已经手动删掉几笔了） */
+      let alive = 0;
+      try { alive = S.importAlive(l); } catch (e) { alive = 0; }
       card.appendChild(U.el('div', {
         style: {
-          display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
           fontSize: '12px', padding: '5px 0', gap: '8px'
         }
       }, [
@@ -754,8 +790,22 @@
         U.el('span', {
           style: { color: 'var(--text-dim)', flex: '1', minWidth: '0', textAlign: 'right' },
           text: l.via + ' · ' + parts.join(' · ')
-        })
-      ]));
+        }),
+        alive ? U.el('button', {
+          class: 'btn ghost sm', style: { flexShrink: '0', padding: '2px 8px', fontSize: '11.5px' },
+          text: '撤销',
+          onclick: () => {
+            App.confirm(`撤销这次导入？会删掉这 ${alive} 笔记录，删了找不回来。`,
+              () => {
+                const n = S.undoImport(l.id);
+                App.closeSheet();
+                App.refresh();
+                U.toast(`已撤销，删掉 ${n} 笔`, 'ok');
+                setTimeout(() => openWeChatImport(), 260);
+              }, '删除');
+          }
+        }) : null
+      ].filter(Boolean)));
     });
 
     const maxTo = logs.map(l => l.to).filter(Boolean).sort().pop();
@@ -1157,7 +1207,7 @@
     L.push(`# 请求：分析我 ${st.month} 的消费`);
     L.push('');
     L.push('## 本月概况');
-    L.push(`- 实际总收入：${U.money(s.income)} 元（统计窗口 ${s.incomeWindow.start} ~ ${s.incomeWindow.end}）`);
+    L.push(`- 实际总收入：${U.money(s.income)} 元（统计窗口 ${s.window.start} ~ ${s.window.end}）`);
     L.push(`  · 其中固定生活费：${U.money(s.stipend)} 元（${s.stipendCount} 笔，每笔约 ${U.money(S.settings.money.stipendAmount)}）`);
     L.push(`  · 额外收入：${U.money(s.extra)} 元（${s.extraCount} 笔）`);
     if (s.referenceIncome != null) {
@@ -1165,7 +1215,7 @@
       L.push(`- 生活费参考值：${U.money(s.referenceIncome)} 元`
         + (Math.abs(d) < 0.01 ? '（已收齐）' : d < 0 ? `（还差 ${U.money(-d)}）` : `（多出 ${U.money(d)}）`));
     }
-    L.push(`- 总支出：${U.money(s.expense)} 元（${txns.filter(t => t.type === 'expense').length} 笔，按自然月）`);
+    L.push(`- 总支出：${U.money(s.expense)} 元（${txns.filter(t => t.type === 'expense').length} 笔，与收入同一个统计窗口）`);
     L.push(`- 结余：${U.money(s.balance)} 元`);
     if (money.savingGoal) L.push(`- 储蓄目标：${U.money(money.savingGoal)} 元`);
     L.push('');

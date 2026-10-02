@@ -35,6 +35,7 @@ SPECS = [
     ('money', 'import-to-photo'),   # 账本：真点「导入账单 → 截图识别」两下
     ('money', 'import-text'),       # 账本：粘贴文字
     ('money', 'import-csv'),        # 账本：CSV
+    ('money', 'edit'),              # 账本：单笔编辑（删除按钮的位置）
     ('money', 'rules'),             # 账本分类规则
     ('money', 'batch'),             # 账本批量整理
 ]

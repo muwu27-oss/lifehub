@@ -63,6 +63,17 @@
     U.$('#sheetTitle').textContent = title;
     body.innerHTML = '';
     (Array.isArray(contentNodes) ? contentNodes : [contentNodes]).forEach(n => n && body.appendChild(n));
+
+    /* 固定底栏：长表单里的「删除 / 保存」原来在滚动区最底下，
+       手机上要滑三屏才看得到，用户会以为根本没有删除。
+       放进 .sheet-foot 就永远贴在底部、不跟着滚。 */
+    const oldFoot = sheet.querySelector('.sheet-foot');
+    if (oldFoot) oldFoot.remove();
+    if (opts.footer) {
+      sheet.appendChild(U.el('div', { class: 'sheet-foot' },
+        Array.isArray(opts.footer) ? opts.footer : [opts.footer]));
+    }
+
     sheet.hidden = false; scrim.hidden = false;
     document.body.style.overflow = 'hidden';
     sheetOnClose = opts.onClose || null;
@@ -272,8 +283,8 @@
       '金额等于这个数的收入算固定生活费（比如 1500 分两次各 750）'));
     body.push(field('金额容差 (元)', input('number', m.stipendTolerance, v => { m.stipendTolerance = v === '' ? 0.5 : Number(v); }, '0.5', '0.1'),
       '防止手续费或浮点误差导致认不出来'));
-    body.push(field('收入按错位窗口统计', checkbox(m.incomeWindowShift !== false, v => { m.incomeWindowShift = v; }),
-      '开启后 10 月收入 = 9/30 ~ 10/30（生活费常在上月底提前到账）。支出始终按自然月'));
+    body.push(field('收支按错位窗口统计', checkbox(m.incomeWindowShift !== false, v => { m.incomeWindowShift = v; }),
+      '开启后 10 月 = 9/30 ~ 10/30，收入和支出都按这个范围算（生活费常在上月底提前到账）。关掉就是自然月 10/1 ~ 10/31'));
     body.push(field('每月预算 (元)', input('number', m.monthlyBudget, v => { m.monthlyBudget = v === '' ? null : Number(v); }, '2500')));
     body.push(field('每月储蓄目标 (元)', input('number', m.savingGoal, v => { m.savingGoal = v === '' ? null : Number(v); }, '500')));
 

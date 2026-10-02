@@ -262,6 +262,39 @@ ok('不再标错位', mo.incomeWindow.shifted === false);
 S.settings.money.incomeWindowShift = true;
 S.save();
 
+/* 支出必须和收入用同一个窗口。
+   曾经支出用自然区间、收入用错位窗口，两边日期范围不同，对不上账。
+   上面的 fixture 支出恰好都落在窗口内，测不出差异，所以这里专门打边界。 */
+console.log('\n═══ 支出与收入共用一个窗口 ═══');
+eq('支出窗口 = 收入窗口（起点）', mo.window.start, mo.incomeWindow.start);
+eq('支出窗口 = 收入窗口（终点）', mo.window.end, mo.incomeWindow.end);
+
+S.reset();
+S.settings.money.incomeWindowShift = true;
+S.add('txns', { date: '2026-09-30', type: 'expense', amount: 50, category: '餐饮' });   // 窗口起点
+S.add('txns', { date: '2026-10-10', type: 'expense', amount: 60, category: '餐饮' });
+S.add('txns', { date: '2026-10-30', type: 'expense', amount: 70, category: '餐饮' });   // 窗口终点
+S.add('txns', { date: '2026-10-31', type: 'expense', amount: 80, category: '餐饮' });   // 超出终点
+S.add('txns', { date: '2026-09-29', type: 'expense', amount: 90, category: '餐饮' });   // 早于起点
+let bw = History.moneyOf(History.range('month', '2026-10-15'));
+eq('窗口内的支出全算进来（50+60+70）', bw.expense, 180);
+ok('9/30（起点）算进来', bw.expense !== 130, String(bw.expense));
+eq('窗口外的两笔被排除，支出笔数 = 3', bw.expenseCount, 3);
+ok('10/31 不算进 10 月', bw.expense < 260, String(bw.expense));
+ok('9/29 不算进 10 月', bw.expense !== 270, String(bw.expense));
+
+/* 10/31 应该出现在 11 月的窗口里 */
+bw = History.moneyOf(History.range('month', '2026-11-15'));
+eq('10/31 落到 11 月窗口', bw.expense, 80);
+eq('11月窗口起点 = 10/31', bw.window.start, '2026-10-31');
+
+/* 关掉错位：收支都回自然月，9/30 出、10/31 进 */
+S.settings.money.incomeWindowShift = false;
+bw = History.moneyOf(History.range('month', '2026-10-15'));
+eq('关掉错位后 10月支出 = 60+70+80', bw.expense, 210);
+eq('关掉错位后窗口起点是 10/1', bw.window.start, '2026-10-01');
+S.settings.money.incomeWindowShift = true;
+
 console.log('\n═══ 750 容差 ═══');
 S.reset();
 S.add('txns', { date: '2026-10-05', type: 'income', amount: 750.5, category: '生活费' });

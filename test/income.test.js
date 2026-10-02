@@ -6,7 +6,7 @@
  *   · 每月生活费 1500，分两次各 750 到账 —— 750 是敏感数字
  *   · 金额 = 750（±容差）的收入 = 固定生活费；其余 = 额外收入
  *   · 收入窗口错位：10 月收入 = 9/30 ~ 10/30（生活费常在上月底提前到账）
- *   · 支出始终按自然月
+ *   · 收入和支出用同一个窗口（曾经支出是自然月，对不上账）
  *   · 设置里的「每月收入」只做参考，不参与总收入计算
  */
 const { load } = require('./harness');
@@ -107,13 +107,44 @@ eq('合计 = 1030.5', m.total, 1030.5);
 eq('生活费笔数 = 1', m.stipendCount, 1);
 eq('额外笔数 = 2', m.extraCount, 2);
 
-console.log('\n═══ 支出不受收入窗口影响（仍按自然月）═══');
+console.log('\n═══ 支出和收入用同一个窗口 ═══');
+/* 曾经支出按自然月（10/1~10/31），收入按错位窗口（9/30~10/30），
+   两边的日期范围不一样，对账时对不上。现在统一走 S.monthWindow()。 */
 fresh();
-add('2026-09-30', 100, 'expense');  // 收入窗口内，但支出不该算进 10 月
+add('2026-09-30', 100, 'expense');  // 窗口起点 → 算进 10 月
 add('2026-10-05', 200, 'expense');
-add('2026-10-31', 300, 'expense');  // 月底最后一天，算 10 月
+add('2026-10-31', 300, 'expense');  // 超出窗口终点 → 算进 11 月
 const s10 = S.monthSummary('2026-10');
-eq('10月支出 = 500（9/30 的不算）', s10.expense, 500);
+eq('10月支出 = 300（9/30 算进来、10/31 不算）', s10.expense, 300);
+eq('10月窗口起点就是 9/30', s10.window.start, '2026-09-30');
+eq('10月窗口终点就是 10/30', s10.window.end, '2026-10-30');
+ok('支出的窗口 = 收入的窗口',
+   s10.window.start === S.monthWindow('2026-10').start &&
+   s10.window.end === S.monthWindow('2026-10').end);
+
+const s11 = S.monthSummary('2026-11');
+eq('10/31 那笔落到 11 月窗口', s11.expense, 300);
+eq('11月窗口起点 = 10/31', s11.window.start, '2026-10-31');
+
+/* 关键一致性：列表里看得到的，必须就是算进总额的 */
+const listed10 = S.txnsInMonth('2026-10');
+eq('10月列表笔数 = 2', listed10.length, 2);
+eq('列表笔数和 summary.count 对得上', listed10.length, s10.count);
+eq('列表里的支出合计 = summary.expense',
+   U.sum(listed10.filter(t => t.type === 'expense'), t => t.amount), s10.expense);
+ok('10/31 不在 10 月列表里', !listed10.some(t => t.date === '2026-10-31'));
+ok('9/30 在 10 月列表里', listed10.some(t => t.date === '2026-09-30'));
+
+/* 关掉错位：收支都回到自然月 */
+S.settings.money.incomeWindowShift = false;
+const s10n = S.monthSummary('2026-10');
+eq('关掉错位后 10月支出 = 500（9/30 不算、10/31 算）', s10n.expense, 500);
+eq('关掉错位后窗口起点 = 10/1', s10n.window.start, '2026-10-01');
+eq('关掉错位后窗口终点 = 10/31', s10n.window.end, '2026-10-31');
+eq('关掉错位后列表里 2 笔（9/30 被排除）', S.txnsInMonth('2026-10').length, 2);
+eq('关掉错位后 10/31 回到 10 月列表',
+   S.txnsInMonth('2026-10').some(t => t.date === '2026-10-31'), true);
+S.settings.money.incomeWindowShift = true;
 
 console.log('\n═══ 设置值降为参考，不覆盖实收 ═══');
 fresh();
