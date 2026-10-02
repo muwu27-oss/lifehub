@@ -288,7 +288,36 @@ ok('截图页说明多选张数', /最多 5 张/.test(impPhoto));
 ok('截图页有选择图片按钮', /选择图片/.test(impPhoto));
 
 /* 文件框必须带 multiple，否则手机上只能选一张 */
+/* ⚠ 真实点按「导入账单」必须落在主入口（三个方式都在）
+   踩过的坑：onclick 直接挂了 openWeChatImport，它第一个形参收到 MouseEvent，
+   mode 变成事件对象 → 匹配不上任何分支 → 一路掉到 CSV 页。
+   表现就是用户说的「图片识别怎么又没了」。
+   注意：必须走真按钮的点击路径，直接调函数是测不出来的。 */
+const impReal = dom('http://127.0.0.1:8777/harness-money-import-real.html');
+ok('点「导入账单」落在主入口', /截图识别/.test(impReal), '主入口上没看到截图识别');
+ok('主入口同时有粘贴文字', /粘贴文字/.test(impReal));
+ok('主入口同时有 CSV', /导入 CSV 文件/.test(impReal));
+ok('没有被丢到 CSV 页', !/官方导出路径/.test(impReal),
+   '说明 render 收到了意外值并掉进了 CSV 分支');
+
+/* 真点两下也要能走到截图页（用户实际路径） */
+const impToPhoto = dom('http://127.0.0.1:8777/harness-money-import-to-photo.html');
+ok('点「导入账单 → 截图识别」能到截图页', /选择图片/.test(impToPhoto),
+   '两下点击没能进入截图页');
+ok('截图页提示上次覆盖范围', /已经覆盖到/.test(impToPhoto));
+
 const moneySrc = fs.readFileSync(path.join(__dirname, '..', 'js', 'views', 'money.js'), 'utf8');
+/* 这就是上面那个 bug 的字面成因，直接守住。
+   要先去掉注释 —— 否则这条断言会被我自己写的说明文字绊倒（栽过两次）。 */
+const moneyCode = moneySrc
+  .replace(/\/\*[\s\S]*?\*\//g, '')      // /* 块注释 */
+  .replace(/(^|[^:])\/\/[^\n]*/g, '$1');   // // 行注释（避开 http://）
+ok('导入入口没有把事件对象当参数', !/onclick:\s*openWeChatImport\b/.test(moneyCode),
+   'onclick 直接挂函数会把 MouseEvent 当第一个参数');
+ok('注释剥离自身有效', /openWeChatImport/.test(moneyCode), '剥太狠了，代码都没了');
+ok('入口对非字符串参数有兜底',
+   /typeof initialMode === 'string'/.test(moneySrc));
+ok('render 对未知 mode 有兜底', /MODES\.indexOf\(mode\)/.test(moneySrc));
 /* 只看真正的那个 input 元素，别被注释里的字样骗了 */
 const imgInput = (moneySrc.match(/U\.el\('input',\s*\{[^}]*accept:\s*'image\/\*'[^}]*\}/) || [''])[0];
 ok('找得到图片文件框', imgInput.length > 0);

@@ -51,7 +51,10 @@
       }),
       U.el('button', {
         class: 'btn ghost', style: { flexShrink: '0' }, text: '导入账单',
-        onclick: openWeChatImport
+        /* 必须包一层。直接写 onclick: openWeChatImport 的话，
+           openWeChatImport 的第一个形参收到的会是 MouseEvent，
+           于是 mode 变成个事件对象、匹配不上任何分支、一路掉到 CSV 页。 */
+        onclick: () => openWeChatImport()
       })
     ]));
   };
@@ -766,7 +769,9 @@
   }
 
   function openWeChatImport(initialMode) {
-    const st2 = { mode: initialMode || 'pick' };   // pick | photo | text | csv
+    const st2 = {
+      mode: typeof initialMode === 'string' && initialMode ? initialMode : 'pick'
+    };                                             // pick | photo | text | csv
     const bodyBox = U.el('div', {});
 
     const ta = U.el('textarea', {
@@ -914,7 +919,13 @@
     }
 
     /* ── 入口选择 ── */
+    const MODES = ['pick', 'photo', 'text', 'csv'];
+
     function render(mode) {
+      /* 兜底：拿到不认识的值就回主入口。
+         下面的分支最后一个是 CSV，没有 else —— 所以任何意外值
+         都会「静默地」把用户丢到 CSV 页，而不是报错。 */
+      if (MODES.indexOf(mode) < 0) mode = 'pick';
       st2.mode = mode;
       bodyBox.innerHTML = '';
 

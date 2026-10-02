@@ -4,7 +4,7 @@
    目的：装到桌面后断网也能完整使用；数据本身在 localStorage。
    ═══════════════════════════════════════════════ */
 
-const VERSION = 'lifehub-v7';
+const VERSION = 'lifehub-v8';
 const SHELL = [
   './',
   './index.html',

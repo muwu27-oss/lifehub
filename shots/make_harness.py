@@ -31,6 +31,8 @@ SPECS = [
     ('body', 'meal-ai'),            # 饮食：AI 查食物 / 拍照入口
     ('money', 'import'),            # 账本：三种导入入口 + 导入记录
     ('money', 'import-photo'),      # 账本：截图识别说明页（上次截到哪儿）
+    ('money', 'import-real'),       # 账本：真点「导入账单」按钮（回归：别掉进 CSV 页）
+    ('money', 'import-to-photo'),   # 账本：真点「导入账单 → 截图识别」两下
     ('money', 'import-text'),       # 账本：粘贴文字
     ('money', 'import-csv'),        # 账本：CSV
     ('money', 'rules'),             # 账本分类规则

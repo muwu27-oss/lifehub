@@ -1144,4 +1144,62 @@ grid-template-columns: repeat(5, 1fr);   /* 只有 5 列，但我塞了 6 个 ta
 
 ---
 
-*最后更新：2026-10-02（圆环重叠修复、多图导入、导入留痕，802 项断言全绿）*
+### 6. 用户反馈「图片识别怎么又没了」—— 我把事件对象当参数传了
+
+上一轮我为了支持「直接打开某个导入方式」，给入口加了形参：
+
+```js
+function openWeChatImport(initialMode) {
+  const st2 = { mode: initialMode || 'pick' };
+  ...
+  render(st2.mode);
+}
+```
+
+但调用点是这样写的：
+
+```js
+U.el('button', { text: '导入账单', onclick: openWeChatImport })   // ← 没包一层
+```
+
+**`onclick` 直挂函数时，第一个实参是 MouseEvent。** 于是：
+
+1. `initialMode` = MouseEvent（真值）
+2. `st2.mode` = MouseEvent
+3. `render(MouseEvent)` → 三个 `if` 全不匹配
+4. **掉进最后一个分支 CSV** —— 因为 CSV 分支没有 `else` 兜底
+
+症状：点「导入账单」直接开在 CSV 页，主入口上「截图识别」看起来消失了。
+用户的原话是「图片识别怎么又没了」。
+
+修了三层，缺一层都还可能复发：
+
+```js
+onclick: () => openWeChatImport()                          // ① 别再传事件
+mode: typeof initialMode === 'string' ? initialMode : 'pick' // ② 只认字符串
+if (MODES.indexOf(mode) < 0) mode = 'pick';                 // ③ render 兜底
+```
+
+第 ③ 层是根因所在：**`render` 的最后一个是 CSV 分支且没有 else，
+任何意外值都会被静默丢到 CSV 页，而不是报错。** 现在意外值一律回主入口。
+
+#### 为什么上一轮的测试没抓到
+
+测试是直接调 `Views.moneyImport()` 的，**跳过了真实点击路径**，
+所以 `onclick` 那个写法根本没被执行到。补了三个 harness 页面专走真按钮：
+
+- `import-real` —— 点「导入账单」
+- `import-to-photo` —— 点「导入账单 → 截图识别」（真两下）
+- 并且**把 bug 退回去验证过测试会红**（7 条断言变红，其中一条正是
+  「主入口上没看到截图识别」，和用户描述的现象一字不差）
+
+> 教训：**测「用户点得到吗」，不要测「函数调得动吗」。**
+> 直接调函数等于把 event handler 这层从被测范围里摘掉了，
+> 而 bug 恰恰就长在这一层。
+
+顺带全库扫了一遍同类写法（`onclick: 裸函数名`），其余几处
+（`doPhoto` / `pickCsv` / `opt` 的回调）都不带形参，只有这一处中招。
+
+---
+
+*最后更新：2026-10-02（修复导入入口掉进 CSV 页；810 项断言全绿）*
