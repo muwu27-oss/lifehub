@@ -409,10 +409,33 @@
     ]));
 
     /* 关于 */
+    /* 版本与更新：手机上「改了没生效」十有八九是 SW 缓存还停在旧版，
+       所以这里要能一眼看到版本号，并且能一键强制更新。 */
+    body.push(U.el('div', { class: 'section-label', text: '版本与更新' }));
+    body.push(U.el('div', { class: 'kv' }, [
+      U.el('span', { class: 'k', text: '当前版本' }),
+      U.el('span', { class: 'v', text: App.VERSION })
+    ]));
+    body.push(U.el('p', {
+      class: 'hint',
+      style: { margin: '6px 0 10px' },
+      text: '手机上看不到刚改的东西时，点下面这个按钮：会清掉本地缓存重新拉取最新版。'
+          + '你的数据存在浏览器里，不受影响。'
+    }));
+    body.push(U.el('button', {
+      class: 'btn ghost block', style: { marginBottom: '18px' },
+      text: '🔄 检查更新（清缓存重载）',
+      onclick: () => {
+        U.toast('正在更新…', 'info');
+        App.forceUpdate();
+      }
+    }));
+
+    /* 关于 */
     body.push(U.el('div', { class: 'section-label', text: '关于' }));
     body.push(U.el('p', {
       style: { fontSize: '12.5px', color: 'var(--text-dim)', lineHeight: '1.7', margin: '0 0 20px' },
-      html: 'LifeHub · 个人学习生活管理<br>完全离线运行，数据只存在本机。<br>' +
+      html: 'LifeHub · 个人学习生活管理 <b>' + App.VERSION + '</b><br>完全离线运行，数据只存在本机。<br>' +
             '提醒通过导出 .ics 到系统日历实现（小米/HyperOS 上最可靠）。'
     }));
 
@@ -713,10 +736,50 @@
   function registerSW() {
     if (!('serviceWorker' in navigator)) return;
     if (location.protocol === 'file:') return;
-    navigator.serviceWorker.register('sw.js').catch(e => {
-      console.warn('[sw] 注册失败（不影响使用）', e.message);
+
+    /* updateViaCache:'none' 是关键 —— 默认情况下浏览器会拿 HTTP 缓存里的
+       sw.js 去比对，GitHub Pages 给的缓存头可能让这个「更新检查」长达一天
+       都看不到新版本，用户就会一直卡在旧版上（踩过：改了功能手机上「没生效」）。 */
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' })
+      .then(reg => { try { reg.update(); } catch (e) {} })
+      .catch(e => { console.warn('[sw] 注册失败（不影响使用）', e.message); });
+
+    /* 新 SW 接管后自动刷一次，用户不用自己找刷新按钮。
+       只在「本来就有 SW 在管」时才刷，避免首次安装时多刷一次。 */
+    let hadController = !!navigator.serviceWorker.controller;
+    let reloading = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController) { hadController = true; return; }
+      if (reloading) return;
+      reloading = true;
+      console.log('[LifeHub] 新版本已接管，自动刷新');
+      location.reload();
     });
   }
+
+  /** 强制更新：注销 SW、清掉所有缓存、带时间戳重载。
+   *  手机上「改了没生效」时的兜底手段。 */
+  App.forceUpdate = function () {
+    const bust = () => {
+      const u = new URL(location.href);
+      u.searchParams.set('v', String(Date.now()));
+      location.replace(u.toString());
+    };
+    const jobs = [];
+    try {
+      if ('serviceWorker' in navigator) {
+        jobs.push(navigator.serviceWorker.getRegistrations()
+          .then(rs => Promise.all(rs.map(r => r.unregister().catch(() => false)))));
+      }
+    } catch (e) {}
+    try {
+      if (global.caches) {
+        jobs.push(caches.keys().then(ks => Promise.all(ks.map(k => caches.delete(k)))));
+      }
+    } catch (e) {}
+    if (!jobs.length) { bust(); return; }
+    Promise.all(jobs).then(bust).catch(bust);
+  };
 
   App.start = function () {
     S.init();
@@ -726,6 +789,10 @@
     registerSW();
     console.log('[LifeHub] 已启动', S.stats());
   };
+
+  /* 界面上的版本号。改功能时和 sw.js 的 VERSION 一起改。
+     手机上「改了没生效」的时候，先来这里看是不是旧版。 */
+  App.VERSION = 'v10';
 
   global.App = App;
 

@@ -335,12 +335,45 @@
       return n;
     },
 
+    /** 这次导入到底对应哪几笔。
+     *  新留痕直接有 ids。
+     *  老留痕（记 ids 这个功能上线之前导的）没有 —— 用户手机上就有这种，
+     *  不兜住的话「撤销」按钮根本不出现，等于白做。
+     *  反推依据三条一起卡，缺一不可：
+     *    ① 这批流水是 bulkAdd 在同一瞬间写进去的（createdAt ≈ 留痕的 at）
+     *    ② 日期落在这次导入的 from~to 区间里
+     *    ③ source 是账单导入来的（不是 manual）
+     *  只卡 ①② 不够 —— 用户刚导完立刻手记一笔，那笔也会被卷进去。
+     *  宁可少认几笔（撤销按钮数字变小），也不能多删用户的账。 */
+    importIds(rec) {
+      if (!rec) return [];
+      if (rec.ids && rec.ids.length) return rec.ids.slice();
+      if (!rec.at) return [];
+      const t0 = new Date(rec.at).getTime();
+      if (!isFinite(t0)) return [];
+      const from = rec.from || '', to = rec.to || '';
+      const WIN = 30 * 1000;          // 30 秒内创建的才算同一次
+      const IMPORTED = { wechat: 1, 'bill-photo': 1, 'bill-text': 1, ai: 1, bill: 1 };
+      return (db.txns || []).filter(t => {
+        if (!IMPORTED[t.source]) return false;          // ③ 手记的不认
+        if (!t.createdAt) return false;
+        const tc = new Date(t.createdAt).getTime();
+        if (!isFinite(tc) || Math.abs(tc - t0) > WIN) return false;   // ①
+        const d = (t.date || '').slice(0, 10);
+        if (!d) return false;
+        if (from && d < from) return false;
+        if (to && d > to) return false;                 // ②
+        return true;
+      }).map(t => t.id);
+    },
+
     /** 这次导入现在还能撤销吗（还有多少笔在库里）。
      *  用户可能已经手动删过几笔，所以按「实际还在的数量」算。 */
     importAlive(rec) {
-      if (!rec || !rec.ids || !rec.ids.length) return 0;
+      const ids = S.importIds(rec);
+      if (!ids.length) return 0;
       const set = {};
-      rec.ids.forEach(id => { set[id] = true; });
+      ids.forEach(id => { set[id] = true; });
       return (db.txns || []).filter(t => set[t.id]).length;
     },
 
@@ -349,7 +382,7 @@
     undoImport(recId) {
       const rec = (db.imports || []).find(r => r.id === recId);
       if (!rec) return 0;
-      const n = S.removeMany('txns', rec.ids || []);
+      const n = S.removeMany('txns', S.importIds(rec));
       db.imports = (db.imports || []).filter(r => r.id !== recId);
       save();
       return n;

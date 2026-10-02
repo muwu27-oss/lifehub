@@ -508,6 +508,11 @@
   /** 给一笔流水定分类、套规则、生成稳定 id。
    *  CSV 导入和 AI 识别都要走这里，否则两条路的分类口径会不一致。 */
   W.finalizeTxn = function (txn) {
+    /* 所有账单导入路径都从这里过，所以在这儿兜住 source：
+       各解析器（CSV→wechat / 文字→bill-text / 截图→bill-photo）自己会设，
+       万一漏了，至少不能留空 —— 留空就跟「手记」分不清了，
+       而「撤销这次导入」要靠 source 区分导入的和手记的。 */
+    if (!txn.source) txn.source = 'bill';
     txn.category = txn.category || '其他';
     txn.autoCategory = W.categorize(txn);
 

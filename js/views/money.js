@@ -777,7 +777,9 @@
       const parts = [`${l.count} 笔`];
       if (l.from && l.to) parts.push(l.from === l.to ? l.from : `${l.from} ~ ${l.to}`);
       if (l.images > 1) parts.push(`${l.images} 张图`);
-      /* 还能撤销多少笔（用户可能已经手动删掉几笔了） */
+      /* 还能撤销多少笔（用户可能已经手动删掉几笔了）。
+         老留痕没记 id，S.importAlive 会按「同一时刻创建 + 日期在区间内 +
+         来源是导入」反推出来 —— 所以升级前导的那几批现在也能撤销。 */
       let alive = 0;
       try { alive = S.importAlive(l); } catch (e) { alive = 0; }
       card.appendChild(U.el('div', {

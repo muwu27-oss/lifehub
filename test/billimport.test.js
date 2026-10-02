@@ -391,8 +391,49 @@ const naked = S.recordImport({ via: 'CSV', txns: [
   { date: '2026-09-01', type: 'expense', amount: 5, category: '餐饮' }] });
 eq('裸对象不产出 id', naked.ids.length, 0);
 const legacy = Object.assign({}, naked, { ids: undefined });
-eq('没有 ids 的老留痕不可撤销', S.importAlive(legacy), 0);
+eq('没有 ids 又没有流水的老留痕不可撤销', S.importAlive(legacy), 0);
 eq('撤销没有 ids 的留痕返回 0', S.undoImport(legacy.id), 0);
+
+/* ── 老留痕反推：用户手机上就有这种 ──
+   「记 ids」上线之前导的账没存 id，不兜住的话撤销按钮压根不出现。
+   反推依据：这一批是 bulkAdd 在同一瞬间写的（createdAt ≈ 留痕的 at），
+   且日期落在这次导入的 from~to 区间里。 */
+console.log('\n═══ 老留痕（没记 id）也能撤销 ═══');
+S.reset();
+const legacyBatch = [
+  { date: '2026-09-30', type: 'expense', amount: 32, category: '餐饮' },
+  { date: '2026-10-01', type: 'expense', amount: 18.5, category: '餐饮' },
+  { date: '2026-10-02', type: 'income', amount: 200, category: '其他' }
+].map(t => WeChat.finalizeTxn(t));
+S.bulkAdd('txns', legacyBatch);
+S.saveNow();
+/* 老版本就是这么记的：有 via / count / from / to，但没有 ids。
+   先正常记一条（这样留痕真的进了 db.imports，undoImport 才找得到），
+   再把 ids 抹掉，模拟升级前留下的数据。 */
+const legacyRec = S.recordImport({ via: '截图识别', images: 4, txns: legacyBatch });
+delete legacyRec.ids;
+S.saveNow();
+eq('这条留痕确实没有 ids', legacyRec.ids === undefined, true);
+eq('反推出 3 笔 id', S.importIds(legacyRec).length, 3);
+eq('老留痕可撤销笔数 = 3', S.importAlive(legacyRec), 3);
+
+/* 反推只认「导入来的」流水。用户刚导完顺手手记一笔，
+   那笔日期可能也在区间内、时刻也挨得近，绝不能被卷进撤销里。 */
+S.add('txns', { date: '2026-10-01', type: 'expense', amount: 999, category: '数码', source: 'manual' });
+S.saveNow();
+eq('手记的那笔不被误认', S.importIds(legacyRec).length, 3);
+eq('库里这时有 4 笔', S.all('txns').length, 4);
+
+/* 时刻对但 source 不对，同样不认 */
+S.add('txns', { date: '2026-10-02', type: 'expense', amount: 777, category: '数码', source: '' });
+S.saveNow();
+eq('source 为空的也不认', S.importIds(legacyRec).length, 3);
+
+const n2 = S.undoImport(legacyRec.id);
+eq('撤销只删那 3 笔', n2, 3);
+eq('手记的两笔都还在', S.all('txns').length, 2);
+ok('999 没被删', S.all('txns').some(t => t.amount === 999));
+ok('777 没被删', S.all('txns').some(t => t.amount === 777));
 
 console.log('\n══════════════');
 console.log('结果: ' + pass + ' 通过, ' + fail + ' 失败');
