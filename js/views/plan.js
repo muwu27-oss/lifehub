@@ -640,7 +640,13 @@
           onclick: () => {
             const n = ICS.download(opts);
             App.closeSheet();
-            U.toast(`已导出 ${n} 个事件`, 'ok');
+            /* 0 个事件导出来的 .ics 是个空日历，导进系统日历什么也不会发生，
+               用户只会以为「坏了」。所以这里要说清楚为什么。 */
+            if (!n) {
+              U.toast('没有可导出的事项：先在「计划」里加上有截止日的任务', 'err');
+            } else {
+              U.toast(`已导出 ${n} 个事件`, 'ok');
+            }
           }
         })
       ])

@@ -401,6 +401,41 @@
         }
       }),
       U.el('button', {
+        class: 'btn ghost sm grow', text: '导入备份',
+        onclick: () => {
+          const inp = U.el('input', { type: 'file', accept: '.json,application/json' });
+          inp.addEventListener('change', async () => {
+            const f = inp.files && inp.files[0];
+            if (!f) return;
+            let obj;
+            try {
+              /* 老备份是用带 BOM 的老版本导出的，这里顺手剥掉，
+                 否则 JSON.parse 会抛 Unexpected token，用户的备份就成了死文件 */
+              const raw = String(await U.readFile(f)).replace(/^\ufeff/, '');
+              obj = JSON.parse(raw);
+            } catch (err) {
+              U.toast('这个文件读不出来：' + err.message, 'err');
+              return;
+            }
+            const st2 = S.stats();
+            App.confirm(
+              `导入这份备份？当前有 ${st2.tasks} 个任务、${st2.txns} 笔账。`
+              + '备份里的内容会并进来，相同的记录不会重复。',
+              () => {
+                try {
+                  S.importAll(obj, 'merge');
+                  App.closeSheet();
+                  App.refresh();
+                  U.toast('已导入备份', 'ok');
+                } catch (err) {
+                  U.toast('导入失败：' + err.message, 'err');
+                }
+              }, '导入');
+          });
+          inp.click();
+        }
+      }),
+      U.el('button', {
         class: 'btn danger sm grow', text: '清空所有数据',
         onclick: () => App.confirm('这会删除全部任务、账目、饮食记录，且无法恢复。确定吗？', () => {
           S.reset(); U.toast('已清空', 'ok'); App.go('today');
@@ -792,7 +827,7 @@
 
   /* 界面上的版本号。改功能时和 sw.js 的 VERSION 一起改。
      手机上「改了没生效」的时候，先来这里看是不是旧版。 */
-  App.VERSION = 'v11';
+  App.VERSION = 'v12';
 
   global.App = App;
 

@@ -123,8 +123,8 @@ ok('帮助页有内容', help.length > 8000, help.length+' 字节');
 /* 折叠节默认只开第一节：其他节内容不该出现 */
 const helpExp=dom('http://127.0.0.1:8777/harness-help-expand.html');
 ok('展开后内容变多', helpExp.length > help.length, help.length+' → '+helpExp.length);
-ok('展开后有 FAQ 的 28 个问题',
-   (helpExp.match(/Q：/g)||[]).length === 28, (helpExp.match(/Q：/g)||[]).length+' 条');
+ok('展开后有 FAQ 的 30 个问题',
+   (helpExp.match(/Q：/g)||[]).length === 30, (helpExp.match(/Q：/g)||[]).length+' 条');
 
 /* 行内标记必须被解析，不能留字面的星号
    （踩过的坑：表格里满屏 **顶部圆环**） */
@@ -361,6 +361,10 @@ const settingsSheet = dom('http://127.0.0.1:8777/harness-today-settings.html');
 ok('设置里有「版本与更新」一节', /版本与更新/.test(settingsSheet), '设置里没有版本一节');
 ok('设置里显示当前版本号', /当前版本/.test(settingsSheet) && /v\d+/.test(settingsSheet));
 ok('设置里有强制更新按钮', /检查更新/.test(settingsSheet), '没有自救入口');
+/* 帮助页写着「设置 → 导入备份」，那就必须真的有这个按钮 ——
+   只能导出不能导入的备份是单向陷阱，换手机时数据就没了。 */
+ok('设置里有「导入备份」按钮', /导入备份/.test(settingsSheet), '帮助页承诺了导入，但按钮不存在');
+ok('设置里有「导出备份」按钮', /导出备份/.test(settingsSheet));
 
 const moneySrc = fs.readFileSync(path.join(__dirname, '..', 'js', 'views', 'money.js'), 'utf8');
 /* 这就是上面那个 bug 的字面成因，直接守住。

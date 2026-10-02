@@ -224,8 +224,16 @@
     } catch (e) { return false; }
   };
 
-  U.download = (filename, content, mime = 'text/plain;charset=utf-8') => {
-    const blob = content instanceof Blob ? content : new Blob(['\ufeff' + content], { type: mime });
+  /** 触发下载。
+   *  ⚠️ 默认**不加** UTF-8 BOM（\ufeff）。
+   *  以前无脑加，结果两种文件都被搞坏：
+   *    · .ics —— 日历解析器逐行读，第一行变成 "\ufeffBEGIN:VCALENDAR" 就不认识，
+   *             手机日历直接报「没有可导入的文件」（真踩过）
+   *    · .json —— JSON.parse 遇到 BOM 抛 Unexpected token
+   *  只有给 Excel 看的 CSV 才需要 BOM，那种情况显式传 { bom: true }。 */
+  U.download = (filename, content, mime = 'text/plain;charset=utf-8', opts = {}) => {
+    const body = (opts && opts.bom === true) ? '\ufeff' + content : content;
+    const blob = content instanceof Blob ? content : new Blob([body], { type: mime });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url; a.download = filename;

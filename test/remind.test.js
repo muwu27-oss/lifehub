@@ -23,6 +23,8 @@ function ok(name, cond, extra = '') {
   if (cond) { pass++; console.log('  ✓ ' + name); }
   else { fail++; console.log('  ✗ ' + name + (extra !== '' ? '  ' + extra : '')); }
 }
+/* 本文件用 ok() 一种断言就够，eq 只是把「相等」写得更清楚 */
+function eq(name, got, want) { ok(name, got === want, '得到 ' + JSON.stringify(got) + '，期望 ' + JSON.stringify(want)); }
 
 S.init();
 const today = U.today();
@@ -238,6 +240,89 @@ S.settings.body.weight = 70;
 S.settings.body.dailyKcal = 1800;
 S.settings.money.monthlyIncome = 3000;
 ok('全部填完后清单为空', S.pendingList().length === 0, S.pendingList().length);
+
+
+/* ═══════════════════════════════════
+   导出文件的**字节**要对
+
+   用户：「我下载了网站生成的ics文件，选择用系统日历打开，
+        但显示没有可导入的文件」
+   根因：U.download 无脑给所有文件加 UTF-8 BOM，.ics 第一行变成
+        "\ufeffBEGIN:VCALENDAR"，日历解析器就不认了。
+   这组断言盯着字节，不看字符串 —— 字符串里 BOM 是隐形的，看不出来。
+   ═══════════════════════════════════ */
+console.log('\n═══ 导出文件不带 BOM ═══');
+
+/* 把 U.download 实际要写进 Blob 的那份内容截下来 */
+function captureDownload(fn) {
+  const origBlob = global.Blob;
+  let captured = null;
+  global.Blob = function (parts, opts) {
+    captured = { text: parts.join(''), mime: opts && opts.type };
+    return { __fake: true, type: opts && opts.type };
+  };
+  const origCreate = URL.createObjectURL;
+  const origRevoke = URL.revokeObjectURL;
+  URL.createObjectURL = () => 'blob:fake';
+  URL.revokeObjectURL = () => {};
+  const origAppend = document.body.appendChild;
+  const origCreateEl = document.createElement;
+  document.body.appendChild = n => n;
+  /* U.download 会造一个 <a> 然后 a.click()。harness 里的 createElement
+     是个假实现，没有 click —— 补上一个记号的替身。 */
+  document.createElement = tag => (String(tag).toLowerCase() === 'a'
+    ? { href: '', download: '', click() { this.clicked = true; }, remove() {}, style: {} }
+    : origCreateEl.call(document, tag));
+  try { fn(); } finally {
+    global.Blob = origBlob;
+    URL.createObjectURL = origCreate;
+    URL.revokeObjectURL = origRevoke;
+    document.body.appendChild = origAppend;
+    document.createElement = origCreateEl;
+  }
+  return captured;
+}
+
+S.reset();
+S.add('tasks', { title: '交报告', kind: 'deadline', due: U.ymd(U.addDays(U.today(), 3)), status: 'todo' });
+const dl = captureDownload(() => ICS.download({ days: 30 }));
+ok('确实触发了下载', !!dl, '没抓到下载内容');
+ok('MIME 是 text/calendar', /text\/calendar/.test(dl.mime || ''), '实际是 ' + dl.mime);
+
+const bytes = Buffer.from(dl.text, 'utf8');
+ok('前 3 字节不是 BOM (ef bb bf)',
+   !(bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF),
+   '前 3 字节 = ' + [...bytes.slice(0, 3)].map(b => b.toString(16)).join(' '));
+eq('文件第一行就是 BEGIN:VCALENDAR（没有任何前缀）',
+   dl.text.split('\r\n')[0], 'BEGIN:VCALENDAR');
+ok('第一个字符不是 \\ufeff', dl.text.charCodeAt(0) !== 0xFEFF,
+   '第一字符码 = ' + dl.text.charCodeAt(0));
+
+/* 结构完整性：手机日历挑食，少一样都可能不认 */
+ok('以 BEGIN:VCALENDAR 开头', dl.text.startsWith('BEGIN:VCALENDAR'));
+ok('以 END:VCALENDAR 结尾', dl.text.trimEnd().endsWith('END:VCALENDAR'));
+ok('有 VERSION:2.0', /\r\nVERSION:2\.0\r\n/.test(dl.text));
+ok('有 PRODID', /\r\nPRODID:/.test(dl.text));
+ok('用 CRLF 换行（iCalendar 规范要求）', /\r\n/.test(dl.text));
+ok('没有裸 LF（挑食的解析器会挂）', !/[^\r]\n/.test(dl.text), '有裸 LF 行');
+ok('有 VEVENT', /BEGIN:VEVENT/.test(dl.text));
+
+/* JSON 备份同样不能带 BOM —— JSON.parse 遇到 BOM 直接抛 */
+S.reset();
+const jdl = captureDownload(() => {
+  U.download('backup.json', JSON.stringify(S.exportAll(), null, 2), 'application/json');
+});
+ok('JSON 备份也拿到了', !!jdl);
+eq('JSON 第一个字符是 {', jdl.text[0], '{');
+ok('JSON 不带 BOM', jdl.text.charCodeAt(0) !== 0xFEFF);
+ok('JSON 能被 JSON.parse 直接吃下（不会 Unexpected token）',
+   (() => { try { JSON.parse(jdl.text); return true; } catch (e) { return false; } })());
+
+/* 需要 BOM 的场合要能显式开（给 Excel 认 UTF-8 CSV） */
+const csvdl = captureDownload(() => {
+  U.download('账单.csv', '日期,金额\n2026-10-01,32', 'text/csv;charset=utf-8', { bom: true });
+});
+eq('显式要 BOM 时第一个字符是 \\ufeff', csvdl.text.charCodeAt(0), 0xFEFF);
 
 console.log('\n═══════════════════════════════════');
 console.log(`结果: ${pass} 通过, ${fail} 失败`);
