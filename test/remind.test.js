@@ -26,6 +26,29 @@ function ok(name, cond, extra = '') {
 /* 本文件用 ok() 一种断言就够，eq 只是把「相等」写得更清楚 */
 function eq(name, got, want) { ok(name, got === want, '得到 ' + JSON.stringify(got) + '，期望 ' + JSON.stringify(want)); }
 
+/* .ics 里现在写的是 **UTC**（18:00 北京时间 = 10:00Z）。
+   所以断言不能再去钉 "T1800" 这个字符串 ——
+   第一，那样等于把「提醒几点响」和「文件里怎么写」绑死；
+   第二，换台非 UTC+8 的机器跑就会红。
+   这两个辅助函数把 UTC 时间戳换算回**本地时刻**再比，
+   测的还是原来那个需求：提醒在本地 18:00 响。 */
+function icsDtstart(block) {
+  const m = String(block || '').match(/DTSTART[^:]*:(\d{8}T\d{6}Z?)/);
+  return m ? m[1] : null;
+}
+function localTimeOf(ics) {
+  const m = String(ics || '').match(/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z?/);
+  if (!m) return null;
+  /* 带 Z 的按 UTC 解释，不带的按本地解释（两种都兼容） */
+  const d = /Z$/.test(ics)
+    ? new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]))
+    : new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
+  return {
+    ymd: `${d.getFullYear()}${U.pad(d.getMonth() + 1)}${U.pad(d.getDate())}`,
+    hm: `${U.pad(d.getHours())}${U.pad(d.getMinutes())}`
+  };
+}
+
 S.init();
 const today = U.today();
 const d = n => U.ymd(U.addDays(today, n));
@@ -69,16 +92,18 @@ const gen2 = ICS.generate({ days: 30 });
 ok('生成了截止提醒', gen2.text.includes('明天截止'), gen2.count + ' 个事件');
 const ddl = gen2.text.split('BEGIN:VEVENT').find(b => b.includes('明天截止'));
 ok('提醒文案含任务名', ddl && ddl.includes('交CV大作业'));
-const m = ddl && ddl.match(/DTSTART[^:]*:(\d{8})T(\d{4})/);
+const t1 = localTimeOf(icsDtstart(ddl));
 const expectDay = U.ymd(U.addDays(today, 9)).replace(/-/g, '');
-ok('提醒日期 = 截止前一天', m && m[1] === expectDay, m && m[1] + ' vs ' + expectDay);
-ok('提醒时刻 = 18:00', m && m[2] === '1800', m && m[2]);
+ok('提醒日期 = 截止前一天', t1 && t1.ymd === expectDay, t1 && t1.ymd + ' vs ' + expectDay);
+ok('提醒时刻 = 本地 18:00', t1 && t1.hm === '1800', t1 && t1.hm);
 ok('带 VALARM 保证真会响', ddl && ddl.includes('BEGIN:VALARM'));
 
 /* 截止当天不应该再提醒（只提前一天） */
-const sameDayBlocks = gen2.text.split('BEGIN:VEVENT').filter(b =>
-  b.includes('明天截止') && /DTSTART[^:]*:(\d{8})/.test(b) &&
-  b.match(/DTSTART[^:]*:(\d{8})/)[1] === U.ymd(U.addDays(today, 10)).replace(/-/g, ''));
+const sameDayBlocks = gen2.text.split('BEGIN:VEVENT').filter(b => {
+  const lt = localTimeOf(icsDtstart(b));
+  return b.includes('明天截止') && lt &&
+    lt.ymd === U.ymd(U.addDays(today, 10)).replace(/-/g, '');
+});
 ok('截止当天不额外提醒', sameDayBlocks.length === 0, sameDayBlocks.length + ' 个');
 
 /* ═══════════ 4. 日常活动 → 每天 18:00 ═══════════ */
@@ -91,8 +116,9 @@ const gen3 = ICS.generate({ days: 5 });
 
 const dailyBlocks = gen3.text.split('BEGIN:VEVENT').filter(b => b.includes('🔁 日常活动'));
 ok('5 天生成 5 个日常提醒', dailyBlocks.length === 5, dailyBlocks.length + ' 个');
-ok('日常提醒都是 18:00',
-  dailyBlocks.every(b => /DTSTART[^:]*:\d{8}T1800/.test(b)));
+ok('日常提醒都是本地 18:00',
+  dailyBlocks.every(b => { const lt = localTimeOf(icsDtstart(b)); return lt && lt.hm === '1800'; }),
+  dailyBlocks.map(b => (localTimeOf(icsDtstart(b)) || {}).hm).join(','));
 ok('日常提醒列出任务名', dailyBlocks[0] && dailyBlocks[0].includes('背单词'));
 ok('日常活动不排期', Sch.suggest(daily) === null);
 ok('日常活动在 dailyTasks 里', S.dailyTasks().some(t => t.id === daily.id));
@@ -166,8 +192,8 @@ S.settings.remind.eveningHour = 20;
 S.settings.remind.eveningMinute = 30;
 const gen7 = ICS.generate({ days: 10 });
 const blk7 = gen7.text.split('BEGIN:VEVENT').find(b => b.includes('明天截止'));
-ok('改设置后 18:00 变成 20:30', blk7 && /DTSTART[^:]*:\d{8}T2030/.test(blk7),
-  blk7 && (blk7.match(/DTSTART[^:]*:(\d{8}T\d{4})/) || [])[1]);
+const t7 = localTimeOf(icsDtstart(blk7));
+ok('改设置后 18:00 变成 20:30', t7 && t7.hm === '2030', t7 && t7.hm);
 S.settings.remind.eveningHour = 18;
 S.settings.remind.eveningMinute = 0;
 
@@ -317,6 +343,68 @@ eq('JSON 第一个字符是 {', jdl.text[0], '{');
 ok('JSON 不带 BOM', jdl.text.charCodeAt(0) !== 0xFEFF);
 ok('JSON 能被 JSON.parse 直接吃下（不会 Unexpected token）',
    (() => { try { JSON.parse(jdl.text); return true; } catch (e) { return false; } })());
+
+/* ── 兼容性：小米/安卓日历挑食，这几条都是「被拒」的高发点 ── */
+
+/* ① 时间必须带 Z（UTC）。浮动时间 + VTIMEZONE 那套在国产解析器上翻过车。 */
+const dtstarts = dl.text.split('\r\n').filter(l => l.startsWith('DTSTART'));
+ok('每个 DTSTART 都以 Z 结尾（UTC）',
+   dtstarts.length > 0 && dtstarts.every(l => /Z$/.test(l)),
+   '有不是 UTC 的：' + dtstarts.filter(l => !/Z$/.test(l)).slice(0, 3).join(' | '));
+
+/* ② 本地 18:00 必须被正确换算成 UTC。
+      不写死 "10:00Z"（那只在 UTC+8 成立），而是按本机时区算出应该是什么，
+      这样既能在北京时间下等价于「10:00Z」，又不会在别的时区误报。
+      写成 18:00Z（忘了换算）会被这条抓到。 */
+const expHmZ = (() => {
+  const d = new Date(); d.setHours(18, 0, 0, 0);
+  return d.toISOString().slice(11, 16).replace(':', '');
+})();
+ok('本地 18:00 换算成 UTC 的 ' + expHmZ + 'Z（没有忘换算）',
+   new RegExp('DTSTART[^:]*:\\d{8}T' + expHmZ + '00Z').test(dl.text),
+   'DTSTART 实际是：' + dl.text.split('\r\n').filter(l => l.startsWith('DTSTART')).slice(0, 2).join(' | '));
+
+/* ③ 绝对不能再有 VTIMEZONE（既然用 UTC 了，留着只会被挑刺） */
+ok('文件里没有 VTIMEZONE', !/VTIMEZONE/.test(dl.text), '还留着没人引用的时区块');
+/* ④ METHOD 会让人把「导入」当「订阅更新」，去掉 */
+ok('文件里没有 METHOD', !/METHOD/.test(dl.text));
+
+/* ⑤ 每个事件只能有一个闹钟。
+      以前无条件加 -PT0M、调用方又给一个 minutes:0，变成两个同一时刻的闹钟 */
+const evBlocks = dl.text.split('BEGIN:VEVENT').slice(1);
+ok('确实生成了事件', evBlocks.length > 0);
+/* 真不变量是「**最多**一个闹钟」：截止当天那种纯展示事件本来就该是 0 个。
+   以前是每个事件两个同一时刻的闹钟（无条件 -PT0M + 调用方 minutes:0）。 */
+ok('没有任何事件带两个以上闹钟',
+   evBlocks.every(b => (b.match(/BEGIN:VALARM/g) || []).length <= 1),
+   '最多的那个带了 ' +
+   Math.max(...evBlocks.map(b => (b.match(/BEGIN:VALARM/g) || []).length)) + ' 个');
+
+/* ⑥ MIME 不能带 charset 参数 —— 安卓会拿它写 MediaStore，
+      带参数可能被记成 octet-stream，日历的文件选择器就看不到这个文件 */
+eq('MIME 精确等于 text/calendar', dl.mime, 'text/calendar');
+
+/* ── 闹钟三态：不能把「显式不要」当成「没指定」 ──
+     用户只要求「截止前一天 18:00 提醒」。
+     截止日当天那条是纯展示，一声都不该响 —— 多响一次就是噪音。 */
+S.reset();
+S.add('tasks', { title: '交报告', kind: 'deadline', due: d(3), status: 'todo' });
+const genT = ICS.generate({ days: 10 });
+const b8 = genT.text.split('BEGIN:VEVENT').slice(1);
+
+const remindBlk = b8.find(x => x.includes('明天截止'));
+const plainBlk = b8.find(x => /SUMMARY:[^\r\n]*交报告/.test(x) && !x.includes('明天截止'));
+ok('有「前一天提醒」事件', !!remindBlk);
+ok('有「截止当天」展示事件', !!plainBlk);
+eq('前一天提醒带 1 个闹钟',
+   (remindBlk.match(/BEGIN:VALARM/g) || []).length, 1);
+eq('截止当天展示事件不带闹钟（显式 [] 就是不要）',
+   (plainBlk.match(/BEGIN:VALARM/g) || []).length, 0);
+
+/* ── 分享路径（安卓上比下载可靠） ──
+      node 里没有 navigator.canShare，所以这两条验的是「不支持时别炸」。 */
+ok('没有分享能力时 canShare() 返回 false', ICS.canShare() === false);
+ok('没有分享能力时 canShare() 不抛异常', (() => { try { ICS.canShare(); return true; } catch (e) { return false; } })());
 
 /* 需要 BOM 的场合要能显式开（给 Excel 认 UTF-8 CSV） */
 const csvdl = captureDownload(() => {

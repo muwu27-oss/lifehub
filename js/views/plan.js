@@ -649,7 +649,26 @@
             }
           }
         })
-      ])
+      ]),
+      /* 安卓上「分享到日历」比「下载再打开」可靠得多（见 ICS.share 的注释）。
+         不支持分享的浏览器干脆不显示这个按钮，免得点了没反应。 */
+      ICS.canShare() ? U.el('button', {
+        class: 'btn ghost block', style: { marginTop: '8px' },
+        text: '📤 分享到日历 / 文件（手机推荐）',
+        onclick: async () => {
+          const r = await ICS.share(opts);
+          if (r.ok) {
+            App.closeSheet();
+            U.toast(`已分享 ${r.count} 个事件，选「日历」即可导入`, 'ok');
+          } else if (r.reason === 'cancel') {
+            /* 用户自己取消的，什么都不用说 */
+          } else if (r.reason === 'unsupported') {
+            U.toast('这个浏览器不支持分享，请用上面的「导出 .ics 文件」', 'err');
+          } else {
+            U.toast('分享失败：' + r.reason, 'err');
+          }
+        }
+      }) : null
     ]);
 
     /* 预览列表 */

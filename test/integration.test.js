@@ -243,11 +243,21 @@ try {
   ok('包含 VALARM 提醒', gen.text.includes('BEGIN:VALARM'));
   ok('事件数与预览一致', gen.count > 0, gen.count);
   ok('不再生成「今日待办检查」噪音事件', !gen.text.includes('今日待办检查'));
-  /* 截止提醒必须落在 18:00 而不是早上 9:00 */
+  /* 截止提醒必须落在**本地** 18:00，而不是早上 9:00。
+     .ics 里写的是 UTC（18:00 北京时间 = 10:00Z），所以要把时间戳换算回本地
+     再比 —— 直接去比 "T1800" 那个字符串会既绑死时区、又测不到真实需求。 */
   const ddlBlocks = gen.text.split('BEGIN:VEVENT').filter(b => b.includes('明天截止'));
   if (ddlBlocks.length) {
-    const dt = (ddlBlocks[0].match(/DTSTART[^:]*:(\d{8})T(\d{4})/) || []);
-    ok('截止提醒在 18:00', dt[2] === '1800', dt[2]);
+    const raw = (ddlBlocks[0].match(/DTSTART[^:]*:(\d{8}T\d{6}Z?)/) || [])[1];
+    const mt = String(raw || '').match(/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(Z?)/);
+    let hm = null;
+    if (mt) {
+      const dd = mt[7] === 'Z'
+        ? new Date(Date.UTC(+mt[1], +mt[2] - 1, +mt[3], +mt[4], +mt[5], +mt[6]))
+        : new Date(+mt[1], +mt[2] - 1, +mt[3], +mt[4], +mt[5], +mt[6]);
+      hm = String(dd.getHours()).padStart(2, '0') + String(dd.getMinutes()).padStart(2, '0');
+    }
+    ok('截止提醒在本地 18:00', hm === '1800', '实际 ' + hm + '（原文 ' + raw + '）');
   }
   console.log(`     → 共 ${gen.count} 个事件，${Math.round(gen.text.length / 1024)} KB`);
 } catch (e) { ok('ICS 导出', false, e.message + ' ' + e.stack); }

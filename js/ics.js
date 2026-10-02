@@ -32,7 +32,19 @@
     return out.join('\r\n');
   }
 
-  /** Date → 本地时间 ICS 格式 "YYYYMMDDTHHmmss"（带 VTIMEZONE 的浮动时间） */
+  /** 时间 → UTC 的 ICS 格式 "YYYYMMDDTHHmmssZ"。
+   *  为什么用 UTC 而不是「浮动时间 + VTIMEZONE」：
+   *  浮动时间（DTSTART:20261002T180000）在 RFC 5545 里合法，但国产/安卓日历
+   *  解析器挑食 —— 文件里一旦出现 VTIMEZONE，有的解析器就要求每个 DTSTART
+   *  必须带 TZID 引用，不带就判定整个文件无效。
+   *  UTC 是兼容性最好的写法：18:00 北京时间 = 10:00Z，语义完全一样，
+   *  而且不再需要一个可能被挑剔的 VTIMEZONE 块。 */
+  function dtUtc(d) {
+    d = d instanceof Date ? d : U.parse(d);
+    return d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+  }
+
+  /** Date → 本地时间 ICS 格式 "YYYYMMDDTHHmmss"（浮动时间，目前未使用） */
   function dtLocal(d) {
     d = d instanceof Date ? d : U.parse(d);
     return `${d.getFullYear()}${U.pad(d.getMonth() + 1)}${U.pad(d.getDate())}T${U.pad(d.getHours())}${U.pad(d.getMinutes())}00`;
@@ -57,20 +69,26 @@
       L.push('DTSTART;VALUE=DATE:' + o.start.replace(/-/g, ''));
       L.push('DTEND;VALUE=DATE:' + o.end.replace(/-/g, ''));
     } else {
-      L.push('DTSTART:' + dtLocal(o.start));
-      L.push('DTEND:' + dtLocal(o.end));
+      L.push('DTSTART:' + dtUtc(o.start));
+      L.push('DTEND:' + dtUtc(o.end));
     }
     L.push('SUMMARY:' + esc(o.title));
     if (o.desc) L.push('DESCRIPTION:' + esc(o.desc));
     if (o.location) L.push('LOCATION:' + esc(o.location));
     L.push('STATUS:CONFIRMED');
     L.push('TRANSP:OPAQUE');
-    L.push('BEGIN:VALARM');
-    L.push('TRIGGER:-PT0M');           // 事件发生时立即提醒
-    L.push('ACTION:DISPLAY');
-    L.push('DESCRIPTION:' + esc(o.title));
-    L.push('END:VALARM');
-    (o.alarms || []).forEach(a => {
+    /* 闹钟是三态，别把「显式不要」和「没指定」混为一谈：
+         alarms === undefined  → 没指定，给一条 -PT0M 兜底
+         alarms === []         → **明确不要**闹钟（一声都不响）
+         alarms === [{...}]    → 用调用方给的
+       以前无条件加一条 -PT0M，调用方又各给了一条 minutes:0，
+       结果每个事件带**两个同一时刻的闹钟**；而「截止日当天」那条
+       本来该是纯展示、不该响的，也被强行加上了一条 09:00 的闹钟 ——
+       用户只要求「截止前一天 18:00 提醒」，多响一次就是噪音。 */
+    const alarms = (o.alarms === undefined || o.alarms === null)
+      ? [{ minutes: 0, desc: o.title }]
+      : o.alarms;
+    alarms.forEach(a => {
       L.push('BEGIN:VALARM');
       L.push('TRIGGER:' + (a.minutes >= 0 ? '-' : '') + 'PT' + Math.abs(a.minutes) + 'M');
       L.push('ACTION:DISPLAY');
@@ -82,29 +100,20 @@
   }
 
   function wrap(events, calName) {
+    /* 头部尽量精简，只留各家日历都认的那几行。去掉的：
+         METHOD  —— 只有 iTIP 调度消息才需要；带上它，有的客户端会把
+                    「导入」当成「订阅更新」处理。Google 的导出也不带。
+         VTIMEZONE / X-WR-TIMEZONE —— 时间已经用 UTC，不再引用任何 TZID；
+                    留一个没人引用的时区块只会多一个被挑刺的机会。 */
     const head = [
       'BEGIN:VCALENDAR',
       'VERSION:2.0',
       'PRODID:-//LifeHub//Personal Planner//CN',
       'CALSCALE:GREGORIAN',
-      'METHOD:PUBLISH',
-      'X-WR-CALNAME:' + esc(calName || 'LifeHub 计划'),
-      'X-WR-TIMEZONE:Asia/Shanghai'
-    ];
-    // 时区块：保证小米日历按北京时间解释
-    const tz = [
-      'BEGIN:VTIMEZONE',
-      'TZID:Asia/Shanghai',
-      'BEGIN:STANDARD',
-      'DTSTART:19700101T000000',
-      'TZOFFSETFROM:+0800',
-      'TZOFFSETTO:+0800',
-      'TZNAME:CST',
-      'END:STANDARD',
-      'END:VTIMEZONE'
+      'X-WR-CALNAME:' + esc(calName || 'LifeHub 计划')
     ];
     const tail = ['END:VCALENDAR'];
-    return head.concat(tz, events, tail).map(fold).join('\r\n');
+    return head.concat(events, tail).map(fold).join('\r\n');
   }
 
   /* ═══════════════════════════════════════════
@@ -251,8 +260,44 @@
   /** 生成并下载 */
   I.download = function (opts = {}) {
     const { text, count } = I.generate(opts);
-    U.download(`lifehub-${U.ymd(new Date())}.ics`, text, 'text/calendar;charset=utf-8');
+    /* MIME 只写 text/calendar，**不带 charset 参数**。
+       安卓下载时会把 Blob 的 type 写进 MediaStore；带 `;charset=utf-8`
+       有可能被记成 application/octet-stream，于是日历的文件选择器
+       （按 text/calendar 过滤）看不到这个文件 —— 表现就是「没有可导入的文件」。 */
+    U.download(`lifehub-${U.ymd(new Date())}.ics`, text, 'text/calendar');
     return count;
+  };
+
+  /** 设备支持把文件分享出去吗（安卓上这条路比下载可靠得多） */
+  I.canShare = function () {
+    try {
+      if (typeof File === 'undefined' || !navigator.canShare) return false;
+      const probe = new File(['x'], 'p.ics', { type: 'text/calendar' });
+      return !!navigator.canShare({ files: [probe] });
+    } catch (e) { return false; }
+  };
+
+  /** 生成 .ics 并交给**系统分享面板**。
+   *
+   *  为什么还要这一条路：
+   *  在「添加到主屏幕」的独立窗口里，blob: + <a download> 这条下载路径在
+   *  安卓上并不可靠 —— 有时存不下来、有时存成 0 字节、有时落在应用自己的
+   *  私有目录里，系统日历的文件选择器根本看不到。
+   *  分享面板是原生能力：可以直接「分享到小米日历」，也可以存进文件管理，
+   *  不依赖浏览器把文件写到哪里。
+   *
+   *  返回 {ok, reason, count}，reason 用来区分「不支持」和「用户取消了」。 */
+  I.share = async function (opts = {}) {
+    const { text, count } = I.generate(opts);
+    if (!I.canShare()) return { ok: false, reason: 'unsupported', count };
+    const file = new File([text], `lifehub-${U.ymd(new Date())}.ics`, { type: 'text/calendar' });
+    try {
+      await navigator.share({ files: [file], title: 'LifeHub 计划' });
+      return { ok: true, count };
+    } catch (e) {
+      if (e && e.name === 'AbortError') return { ok: false, reason: 'cancel', count };
+      return { ok: false, reason: (e && e.message) || '分享失败', count };
+    }
   };
 
   /** 生成 Google 日历 / 其它在线日历可订阅的单文件（同上，语义一致） */

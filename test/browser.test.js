@@ -123,8 +123,8 @@ ok('帮助页有内容', help.length > 8000, help.length+' 字节');
 /* 折叠节默认只开第一节：其他节内容不该出现 */
 const helpExp=dom('http://127.0.0.1:8777/harness-help-expand.html');
 ok('展开后内容变多', helpExp.length > help.length, help.length+' → '+helpExp.length);
-ok('展开后有 FAQ 的 30 个问题',
-   (helpExp.match(/Q：/g)||[]).length === 30, (helpExp.match(/Q：/g)||[]).length+' 条');
+ok('展开后有 FAQ 的 31 个问题',
+   (helpExp.match(/Q：/g)||[]).length === 31, (helpExp.match(/Q：/g)||[]).length+' 条');
 
 /* 行内标记必须被解析，不能留字面的星号
    （踩过的坑：表格里满屏 **顶部圆环**） */
