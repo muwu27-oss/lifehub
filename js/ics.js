@@ -123,18 +123,52 @@
   /**
    * @param {object} opts
    *   days        {number}  未来覆盖天数（默认取设置）
-   *   includeDaily {bool} 是否生成日常活动提醒（每天 18:00）
+   *   includeDaily {bool} 是否生成日常活动提醒（每天两次，见 dailySlots）
    *   includeDeadline{bool} 是否生成截止前一天提醒
    *   includeTasks {bool}   是否把任务本身也放进日历
    */
   /* ═══════════ 提醒策略（这一节决定导出什么） ═══════════
      用户的规则：
        ① 有确切截止日的任务 → 只在「截止前一天 18:00」提醒一次
-       ② 手动标记为「日常活动」的 → 每天 18:00 提醒（打卡用）
+       ② 手动标记为「日常活动」的 → 每天提醒两次（默认 18:00 + 22:30，打卡用）
        ③ 长期任务（没截止没时间） → 不提醒、不排期，只在 App 里的长期栏显示
 
      注意与旧版的区别：旧版会给「每一天有未完成任务」都生成一个 18:00 事件，
      噪音很大（一导日历天天响）。现在只保留上面两类。 */
+
+  /* ═══════════ 日常提醒的时刻（一天可以两次） ═══════════
+     用户 2026-10-03 的要求：日常任务的提醒改成「晚 6 点 + 晚 22:30 各一次」。
+     晚 6 点那次是「该做了」，22:30 那次是「今天还没打勾的再确认一遍」。
+     nightHour 设成 null 就退回「一天只提醒一次」。
+     时刻集中在这里算，界面上写「每天几点提醒」的文案也读它 —— 否则改了设置、
+     说明文字还写着旧时间，用户会以为没生效。 */
+  I.dailySlots = function () {
+    const st = S.settings.remind;
+    const slots = [{
+      hour: st.eveningHour != null ? st.eveningHour : 18,
+      minute: st.eveningMinute != null ? st.eveningMinute : 0,
+      night: false
+    }];
+    if (st.nightHour != null) {
+      slots.push({
+        hour: st.nightHour,
+        minute: st.nightMinute != null ? st.nightMinute : 0,
+        night: true
+      });
+    }
+    return slots;
+  };
+
+  /** 日常提醒的时刻，如 ['18:00', '22:30'] */
+  I.dailyTimes = function () {
+    return I.dailySlots().map(s => `${U.pad(s.hour)}:${U.pad(s.minute)}`);
+  };
+
+  /** 给人看的一句话，如「18:00 和 22:30」 */
+  I.dailyTimesText = function () {
+    return I.dailyTimes().join(' 和 ');
+  };
+
   I.buildEvents = function (opts = {}) {
     const st = S.settings.remind;
     const days = opts.days || st.lookaheadDays || 30;
@@ -148,29 +182,40 @@
     const hour = st.eveningHour != null ? st.eveningHour : 18;
     const minute = st.eveningMinute != null ? st.eveningMinute : 0;
 
-    /* ── ① 日常活动：每天 18:00 一个提醒，列出所有日常项 ── */
+    /* ── ① 日常活动：每天每个时刻一个提醒，列出所有日常项 ──
+       为什么是**两个独立事件**、而不是一个事件带两个 VALARM：
+       第二个闹钟要落在事件开始之后 4.5 小时，只能写成正数的 TRIGGER:PT270M。
+       正数触发虽然合 RFC 5545，但各家日历支持不一致，真被忽略的话
+       用户是「静默地」少了 22:30 那次提醒 —— 根本看不出来。
+       两个事件各有自己的 -PT0M 闹钟，任何日历都认。 */
     if (includeDaily) {
       const daily = S.dailyTasks();
+      const slots = I.dailySlots();
       if (daily.length) {
+        const lines = daily.map(t => {
+          const cat = S.CATS[t.cat] || S.CATS.life;
+          return `· ${t.title}（${cat.short}）`;
+        });
         for (let i = 0; i < days; i++) {
           const day = U.addDays(today, i);
           const ds = U.ymd(day);
-          const start = new Date(day); start.setHours(hour, minute, 0, 0);
-          const end = new Date(start.getTime() + 15 * 60000);
+          slots.forEach(slot => {
+            const start = new Date(day); start.setHours(slot.hour, slot.minute, 0, 0);
+            const end = new Date(start.getTime() + 15 * 60000);
+            const desc = (slot.night
+              ? '今天还没打勾的，睡前再确认一遍：\n\n'
+              : '今天要做的日常：\n\n') +
+              `${lines.join('\n')}\n\n共 ${daily.length} 项，做完记得在 LifeHub 打勾\n\n来自 LifeHub`;
 
-          const lines = daily.map(t => {
-            const cat = S.CATS[t.cat] || S.CATS.life;
-            return `· ${t.title}（${cat.short}）`;
-          });
-          const desc = `今天要做的日常：\n\n${lines.join('\n')}\n\n` +
-            `共 ${daily.length} 项，做完记得在 LifeHub 打勾\n\n来自 LifeHub`;
-
-          events.push({
-            uid: `daily-${ds}-${stamp}@lifehub`,
-            start, end,
-            title: `🔁 日常活动 ${daily.length} 项`,
-            desc,
-            alarms: [{ minutes: 0, desc: '今天的日常活动' }]
+            events.push({
+              uid: `${slot.night ? 'daily-night' : 'daily'}-${ds}-${stamp}@lifehub`,
+              start, end,
+              title: slot.night
+                ? `🌙 睡前确认：日常活动 ${daily.length} 项`
+                : `🔁 日常活动 ${daily.length} 项`,
+              desc,
+              alarms: [{ minutes: 0, desc: slot.night ? '睡前确认日常活动' : '今天的日常活动' }]
+            });
           });
         }
       }

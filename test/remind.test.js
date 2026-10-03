@@ -7,7 +7,9 @@
  *      → 只在「截止日前一天 18:00」提醒一次
  *
  *   ② 用户特别标记为「日常活动」的
- *      → 每天 18:00 提醒
+ *      → 每天提醒两次：18:00 + 22:30
+ *        （18:00 那次是「该做了」，22:30 那次是「今天还没打勾的再确认一遍」。
+ *         设置里把「睡前再提醒一次」清空，就退回一天只提醒一次）
  *
  *   ③ 既没有截止日期、也没安排时间的事项
  *      → 归为「长期任务」：不排期、不提醒，
@@ -47,6 +49,15 @@ function localTimeOf(ics) {
     ymd: `${d.getFullYear()}${U.pad(d.getMonth() + 1)}${U.pad(d.getDate())}`,
     hm: `${U.pad(d.getHours())}${U.pad(d.getMinutes())}`
   };
+}
+
+/* iCalendar 规范要求把超过 75 字节的行折起来（CRLF + 一个空格续行）。
+   于是 DESCRIPTION 里的「背单词」可能正好被折在中间，变成
+   「背单」+ 换行 +「词」—— 这时 includes('背单词') 会假红。
+   这是测试的问题，不是导出的问题（折行本身完全合法）。
+   所以断言事件内容之前，一律先解折。 */
+function unfold(block) {
+  return String(block || '').replace(/\r\n[ \t]/g, '');
 }
 
 S.init();
@@ -106,27 +117,72 @@ const sameDayBlocks = gen2.text.split('BEGIN:VEVENT').filter(b => {
 });
 ok('截止当天不额外提醒', sameDayBlocks.length === 0, sameDayBlocks.length + ' 个');
 
-/* ═══════════ 4. 日常活动 → 每天 18:00 ═══════════ */
-console.log('\n=== 4. 日常活动：每天 18:00 提醒 ===');
+/* ═══════════ 4. 日常活动 → 每天两次（18:00 + 22:30） ═══════════ */
+console.log('\n=== 4. 日常活动：每天 18:00 + 22:30 各提醒一次 ===');
 
 S.reset();
 S.init();
 const daily = S.add('tasks', { title: '背单词', cat: 'study', kind: 'daily' });
 const gen3 = ICS.generate({ days: 5 });
 
-const dailyBlocks = gen3.text.split('BEGIN:VEVENT').filter(b => b.includes('🔁 日常活动'));
-ok('5 天生成 5 个日常提醒', dailyBlocks.length === 5, dailyBlocks.length + ' 个');
-ok('日常提醒都是本地 18:00',
-  dailyBlocks.every(b => { const lt = localTimeOf(icsDtstart(b)); return lt && lt.hm === '1800'; }),
-  dailyBlocks.map(b => (localTimeOf(icsDtstart(b)) || {}).hm).join(','));
-ok('日常提醒列出任务名', dailyBlocks[0] && dailyBlocks[0].includes('背单词'));
+/* 一天两次 → 5 天 10 个。两批标题不同（晚 6 点是「该做了」，
+   22:30 是「睡前再确认」），所以分开数、分开验时刻。 */
+const evs = t => gen3.text.split('BEGIN:VEVENT').filter(b => b.includes(t));
+const dailyBlocks = evs('🔁 日常活动');
+const nightBlocks = evs('🌙 睡前确认');
+const hmOf = b => (localTimeOf(icsDtstart(b)) || {}).hm;
+
+ok('5 天生成 5 个 18:00 日常提醒', dailyBlocks.length === 5, dailyBlocks.length + ' 个');
+ok('5 天生成 5 个 22:30 睡前提醒', nightBlocks.length === 5, nightBlocks.length + ' 个');
+ok('18:00 那批都落在本地 18:00', dailyBlocks.every(b => hmOf(b) === '1800'),
+  dailyBlocks.map(hmOf).join(','));
+ok('睡前那批都落在本地 22:30', nightBlocks.every(b => hmOf(b) === '2230'),
+  nightBlocks.map(hmOf).join(','));
+
+/* 「会不会真的响」的关键：两个事件必须各有自己的闹钟。
+   这是选择「两个事件」而不是「一个事件带两个 VALARM」的原因 ——
+   后者第二个闹钟只能写成正数的 TRIGGER:PT270M，很多日历会静默忽略。 */
+const allDaily = dailyBlocks.concat(nightBlocks);
+ok('每个日常事件都带闹钟', allDaily.every(b => b.includes('BEGIN:VALARM')),
+  '有事件没带闹钟');
+ok('闹钟都是 -PT0M（事件开始时响）', allDaily.every(b => b.includes('TRIGGER:-PT0M')),
+  '闹钟触发时刻不对');
+ok('每个日常事件只有一个闹钟', allDaily.every(b => (b.match(/BEGIN:VALARM/g) || []).length === 1),
+  '闹钟数量不对');
+
+ok('日常提醒列出任务名', unfold(dailyBlocks[0]).includes('背单词'));
+ok('睡前提醒也列出任务名', unfold(nightBlocks[0]).includes('背单词'));
+ok('睡前提醒的措辞是「睡前再确认」而不是重复一遍白天的话',
+  unfold(nightBlocks[0]).includes('睡前再确认') && unfold(nightBlocks[0]).includes('还没打勾'));
+ok('两个事件的 UID 不同（否则日历会当成同一条）',
+  dailyBlocks[0] && nightBlocks[0] &&
+  /UID:([^\r\n]+)/.exec(dailyBlocks[0])[1] !== /UID:([^\r\n]+)/.exec(nightBlocks[0])[1]);
 ok('日常活动不排期', Sch.suggest(daily) === null);
 ok('日常活动在 dailyTasks 里', S.dailyTasks().some(t => t.id === daily.id));
+
+/* 关掉第二次 → 退回「一天只提醒一次」的老行为 */
+S.settings.remind.nightHour = null;
+const gen3b = ICS.generate({ days: 5 });
+ok('关掉睡前提醒后只剩一天一次',
+  gen3b.text.split('BEGIN:VEVENT').filter(b => b.includes('日常活动')).length === 5
+  && !gen3b.text.includes('🌙 睡前确认'));
+ok('dailyTimes 也只剩一个', ICS.dailyTimes().length === 1, ICS.dailyTimes().join(','));
+
+/* 时刻跟随设置，界面文案也读它（help/plan/importv 都用 dailyTimesText） */
+S.settings.remind.nightHour = 23; S.settings.remind.nightMinute = 15;
+ok('改了睡前时间后 dailyTimes 跟着变', ICS.dailyTimes()[1] === '23:15', ICS.dailyTimes().join(','));
+ok('dailyTimesText 是给人看的一句话', ICS.dailyTimesText() === '18:00 和 23:15', ICS.dailyTimesText());
+const gen3c = ICS.generate({ days: 2 });
+ok('改了设置后导出的时刻也变',
+  gen3c.text.split('BEGIN:VEVENT').filter(b => b.includes('🌙 睡前确认'))
+    .every(b => (localTimeOf(icsDtstart(b)) || {}).hm === '2315'));
+S.settings.remind.nightHour = 22; S.settings.remind.nightMinute = 30;
 
 /* 没有日常活动时不该产生这类事件 */
 S.remove('tasks', daily.id);
 const gen4 = ICS.generate({ days: 5 });
-ok('没有日常活动就不生成日常事件', !gen4.text.includes('🔁 日常活动'));
+ok('没有日常活动就不生成日常事件',
+  !gen4.text.includes('🔁 日常活动') && !gen4.text.includes('🌙 睡前确认'));
 
 /* ═══════════ 5. 三类混在一起 ═══════════ */
 console.log('\n=== 5. 三类混排 ===');

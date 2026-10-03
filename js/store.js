@@ -178,8 +178,10 @@
 
       /* 提醒 */
       remind: {
-        eveningHour: 18,        // 晚 6 点检查未完成
+        eveningHour: 18,        // 第一次：晚 6 点检查未完成
         eveningMinute: 0,
+        nightHour: 22,          // 第二次：睡前再确认一遍（22:30）
+        nightMinute: 30,        //   设成 null 就没有第二次，只提醒一次
         deadlineLeadDays: 1,    // 截止前一天提醒
         lookaheadDays: 30,      // 导出日历覆盖未来天数
         enabled: true

@@ -170,7 +170,7 @@
       U.el('div', {
         style: { fontSize: '11.5px', color: 'var(--text-faint)', marginTop: '8px', lineHeight: '1.6' },
         text: nDaily
-          ? '提醒：有截止的在截止前一天晚 6 点提醒；日常活动每天晚 6 点提醒；长期任务不提醒。'
+          ? `提醒：有截止的在截止前一天晚 6 点提醒；日常活动每天 ${ICS.dailyTimesText()} 各提醒一次；长期任务不提醒。`
           : '提醒：有截止的在截止前一天晚 6 点提醒；没有截止的会进「长期」栏，不提醒。'
       })
     ]));
@@ -248,7 +248,7 @@
           background: 'transparent'
         },
         text: isDaily ? '🔁 日常' : '设为日常',
-        title: isDaily ? '点击取消日常标记' : '标记为日常活动：每天晚 6 点提醒'
+        title: isDaily ? '点击取消日常标记' : `标记为日常活动：每天 ${ICS.dailyTimesText()} 各提醒一次`
       });
       kindBtn.addEventListener('click', e => {
         e.stopPropagation();

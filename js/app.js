@@ -300,6 +300,16 @@
       const [h, mi] = String(v).split(':');
       r.eveningHour = Number(h) || 18; r.eveningMinute = Number(mi) || 0;
     })));
+    /* 第二次提醒（日常任务）。默认 22:30。
+       留空 = 不要第二次，退回「一天只提醒一次」的老行为。
+       用 null 而不是 00:00 表示「没有」—— 00:00 是个合法时刻，不能拿来当空值。 */
+    body.push(field('睡前再提醒一次（留空则只提醒一次）',
+      input('time', r.nightHour == null ? '' : `${U.pad(r.nightHour)}:${U.pad(r.nightMinute)}`, v => {
+        if (!v) { r.nightHour = null; r.nightMinute = null; return; }
+        const [h, mi] = String(v).split(':');
+        r.nightHour = Number(h) || 0; r.nightMinute = Number(mi) || 0;
+      }),
+      `日常活动每天提醒两次（${ICS.dailyTimesText()}）。只影响「日常活动」，不影响截止提醒`));
     body.push(field('长任务提前几天提醒', input('number', r.deadlineLeadDays, v => { r.deadlineLeadDays = Number(v) || 1; }, '1', '1')));
     body.push(field('日历导出覆盖未来天数', input('number', r.lookaheadDays, v => { r.lookaheadDays = Number(v) || 30; }, '30', '5')));
 
@@ -942,7 +952,7 @@
 
   /* 界面上的版本号。改功能时和 sw.js 的 VERSION 一起改。
      手机上「改了没生效」的时候，先来这里看是不是旧版。 */
-  App.VERSION = 'v16';
+  App.VERSION = 'v17';
 
   global.App = App;
 

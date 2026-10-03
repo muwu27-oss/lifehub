@@ -250,7 +250,7 @@
 
       body.appendChild(table([
         ['**有截止日**', '导入时解析出了截止时间', '截止日**前一天 18:00** 提醒一次'],
-        ['**日常活动**', '你手动标记了，或标题带「每天/每日」', '**每天 18:00** 提醒'],
+        ['**日常活动**', '你手动标记了，或标题带「每天/每日」', `**每天 ${ICS.dailyTimesText()}** 各提醒一次`],
         ['**长期任务**', '既没截止日、也没安排时间', '**不提醒**，只在长期栏里待着']
       ], ['类型', '怎么判断', '提醒方式']));
 
@@ -330,10 +330,17 @@
       ]));
 
       body.appendChild(U.el('div', { class: 'section-label', text: '导出的内容' }));
-      body.appendChild(table([
+      /* 第二行只在开了「睡前再提醒一次」时才列出来，
+         否则说明表格会写一个用户根本没导出的事件。 */
+      const dailyTimes = ICS.dailyTimes();
+      const exportRows = [
         ['⚠️ 明天截止：交CV大作业', '截止日前一天 18:00'],
-        ['🔁 日常活动 3 项', '每天 18:00，列出所有日常活动']
-      ], ['事件', '时间']));
+        ['🔁 日常活动 3 项', `每天 ${dailyTimes[0]}，列出所有日常活动`]
+      ];
+      if (dailyTimes[1]) {
+        exportRows.push(['🌙 睡前确认：日常活动 3 项', `每天 ${dailyTimes[1]}，还没打勾的再确认一遍`]);
+      }
+      body.appendChild(table(exportRows, ['事件', '时间']));
 
       body.appendChild(U.el('div', { class: 'section-label', text: '多久导一次' }));
       body.appendChild(p('导出范围是未来 30 天。建议每 2 周到 1 个月重导一次，不用每天导。'));

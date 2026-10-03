@@ -390,7 +390,7 @@
 
     const box = U.el('div', {}, [
       App.field('任务内容', titleIn),
-      App.field('类型', kindChips, '决定怎么提醒：有截止 → 截止前一天晚 6 点；日常 → 每天晚 6 点；长期 → 不提醒'),
+      App.field('类型', kindChips, `决定怎么提醒：有截止 → 截止前一天晚 6 点；日常 → 每天 ${ICS.dailyTimesText()} 各提醒一次；长期 → 不提醒`),
       App.field('分类', catChips),
       App.field('优先级', prioChips),
       App.field('开始时间', startIn),
@@ -410,7 +410,7 @@
         App.field('类型', App.chips(
           Object.keys(S.KINDS).map(k => ({ value: k, label: S.KINDS[k].name })), t.kind,
           v => { t.kind = v; rebuild(); }),
-          '决定怎么提醒：有截止 → 截止前一天晚 6 点；日常 → 每天晚 6 点；长期 → 不提醒'),
+          `决定怎么提醒：有截止 → 截止前一天晚 6 点；日常 → 每天 ${ICS.dailyTimesText()} 各提醒一次；长期 → 不提醒`),
         App.field('分类', App.chips(
           Object.keys(S.CATS).map(c => ({ value: c, label: S.CATS[c].short })), t.cat,
           v => { t.cat = v; rebuild(); })),
@@ -607,7 +607,9 @@
     const opts = { days: r.lookaheadDays, includeDaily: true, includeDeadline: true, includeTasks: true };
 
     const preview = ICS.preview(opts);
-    const evening = preview.filter(p => p.kind === 'evening').length;
+    /* 这里以前写的是 p.kind === 'evening'，但 ICS.preview 返回的是 'daily'，
+       两边对不上 → 导出预览里「每晚检查」永远显示 0 个。 */
+    const evening = preview.filter(p => p.kind === 'daily').length;
     const deadline = preview.filter(p => p.kind === 'deadline').length;
     const taskCount = preview.filter(p => p.kind === 'task').length;
 
@@ -617,7 +619,7 @@
         text: `将生成未来 ${r.lookaheadDays} 天的日历事件，导入小米系统日历后：`
       }),
       U.el('div', { class: 'stat-grid', style: { marginBottom: '14px' } }, [
-        App.stat('每晚检查', evening, '个', `${U.pad(r.eveningHour)}:${U.pad(r.eveningMinute)} 提醒未完成`),
+        App.stat('日常提醒', evening, '个', `${ICS.dailyTimesText()} 各一次`),
         App.stat('截止提醒', deadline, '个', `提前 ${r.deadlineLeadDays} 天`),
         App.stat('任务事件', taskCount, '个', '任务本身进日历'),
         App.stat('合计', preview.length, '个', '')
