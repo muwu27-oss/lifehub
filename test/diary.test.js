@@ -343,10 +343,22 @@ Diary.lock();
 S.reset(); S.init();
 await Diary.setup('清空测试密码123');
 await Diary.saveEntry('2026-10-01', '要被清掉的', 5);
+
+/* counts() 是锁屏上「忘记密码 → 重置」用的，负责如实报出会丢多少。
+   关键性质是**不用密钥也能数** —— 数的是密文条数，不是内容。
+   否则忘了密码的人根本看不到自己将要失去什么，只能盲删。 */
+Diary.lock();
+ok('上锁了', !Diary.isUnlocked());
+eq('上锁后 counts 仍数得出日记', Diary.counts().entries, 1);
+eq('上锁后 counts 仍数得出谈话', Diary.counts().chats, 0);
+eq('上锁后 counts 仍数得出小结', Diary.counts().digests, 0);
+
 Diary.wipe();
 eq('条目清空了', S.all('diaryEntries').length, 0);
 eq('密码也清了', Diary.hasPassword(), false);
 eq('盐也清了', S.settings.diary.salt, '');
+eq('清空后 counts 全归零',
+  Diary.counts().entries + Diary.counts().chats + Diary.counts().digests, 0);
 
 console.log('\n=== 19. 密码强度提示 ===');
 ok('太短的算弱', Diary.passwordHint('abc').level === 'weak');

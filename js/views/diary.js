@@ -167,7 +167,7 @@
       } catch (ex) {
         errBox.style.color = 'var(--danger)';
         errBox.textContent = ex.message === '密码不对'
-          ? '密码不对。再想想 —— 实在想不起来，日记就没法恢复了。'
+          ? '密码不对。再想想 —— 实在想不起来，就用下面的「重置日记」，但内容会一起删掉。'
           : ex.message;
       }
     }
@@ -185,6 +185,40 @@
         U.el('button', { class: 'btn primary grow', text: '解锁', onclick: go })
       ])
     ]));
+
+    /* ── 忘记密码的唯一出口 ──
+       这里给的**不是「找回」而是「重置」**。真要能找回，就等于别人也能打开，
+       那这套加密就白做了 —— 所以重置的代价是内容一起永久删掉。
+
+       为什么必须放在锁屏上：设了密码又想不起来的人**根本进不去「设置」子页**，
+       而原来那个「清空整个日记」按钮恰好就藏在里面，等于没有出口。
+       重置本身不需要密钥（Diary.wipe 只清集合 + 复位 cfg），这里也确实没碰解密。
+
+       故意做得低调、和「解锁」隔开一段、标签自带警告：
+       知道密码的人不该在这块屏幕上手滑毁掉整本日记。 */
+    function resetDiary() {
+      const n = Diary.counts();
+      const empty = n.entries + n.chats + n.digests === 0;
+      App.confirm(
+        '重置会把日记里的全部内容永久删除，并清掉密码 —— 没有任何找回的可能。'
+        + '\n\n当前有 ' + n.entries + ' 篇日记、' + n.chats + ' 段谈话、' + n.digests + ' 份小结。'
+        + (empty ? '\n\n现在是空的，重置不会丢任何东西。' : '\n\n删掉就真的没了。'),
+        () => {
+          Diary.wipe();
+          VS.tab = 'write';
+          U.toast('日记已重置，可以重新设密码了', 'ok');
+          Views.diary();
+        },
+        '永久删除并重置'
+      );
+    }
+
+    root.appendChild(U.el('button', {
+      class: 'btn ghost block sm',
+      style: { marginTop: '16px' },
+      text: '忘记密码？重置日记（会删掉全部内容）',
+      onclick: resetDiary
+    }));
   }
 
   /* ═══════════════════════════════════════════════
@@ -1005,7 +1039,9 @@
           fontSize: '12px', lineHeight: '1.7', padding: '10px', marginBottom: '14px',
           background: 'var(--warn-soft)', color: 'var(--warn)', borderRadius: 'var(--radius-sm)'
         },
-        text: '⚠️ 忘记密码 = 日记永久打不开。没有找回流程 —— 能帮你找回，就等于别人也能打开。'
+        text: '⚠️ 忘记密码 = 日记打不开。没有「找回」流程 —— 能帮你找回，就等于别人也能打开。'
+          + '唯一的出路是解锁页下面的「重置日记」：密码会清掉、日记重新可用，'
+          + '但里面的内容会一起永久删除。'
       })
     ]);
 

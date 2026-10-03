@@ -284,6 +284,60 @@ const FLOW = `(async () => {
     ok('★ 上锁的日记确实没进 AI 明文日志',
       await s.evaluate('S.all("aiLogs").filter(function(l){ return l.kind && l.kind.indexOf("diary") === 0; }).length === 0'));
 
+    /* ═══════════ 忘记密码：锁屏上必须真有一条出路 ═══════════
+       这是用户真实卡住过的场景：设了密码、然后想不起来了。
+       原来唯一的「清空整个日记」按钮藏在「设置」子页里，而那扇门要解锁才开
+       —— 对一个忘了密码的人来说，等于**根本没有出口**。
+       所以这段放在刷新之后：页面刚加载、日记锁着、一个密码字母都不输，
+       看用户能不能自己走出来。 */
+    console.log('\n── 忘记密码 → 重置（用户真实卡住的场景） ──');
+    const reset = await s.evaluate(`(async () => {
+      ${HELPERS}
+      const out = {};
+      App.go('diary');
+      await sleep(400);
+      const v = document.getElementById('view-diary');
+      out.atLock = v.textContent.indexOf('已加密') >= 0;
+      out.entryShown = v.textContent.indexOf('忘记密码') >= 0;
+      /* 低调放置：它不能和「解锁」挤在一排，否则知道密码的人会手滑 */
+      out.notNextToUnlock = !!(btnByText(v, '解锁') && btnByText(v, '忘记密码') &&
+        btnByText(v, '解锁').parentElement !== btnByText(v, '忘记密码').parentElement);
+
+      /* 一个字母都不输，直接点 */
+      btnByText(v, '忘记密码').click();
+      await sleep(450);
+      const sh = document.getElementById('sheetBody');
+      out.confirmShown = !!sh && sh.textContent.indexOf('永久删除') >= 0;
+      /* 如实报数：这次存储里还有 1 篇 */
+      out.confirmCount = /当前有 1 篇日记/.test(sh ? sh.textContent : '');
+      /* 安全性质：点一下**不该**立刻删，必须再确认一次 */
+      out.stillThere = Diary.hasPassword() && S.all('diaryEntries').length === 1;
+
+      btnByText(sh, '永久删除并重置').click();
+      await sleep(800);
+      out.wipedPassword = !Diary.hasPassword();
+      out.wipedEntries = S.all('diaryEntries').length;
+      out.wipedChats = S.all('diaryChats').length;
+      out.wipedDigests = S.all('diaryDigests').length;
+      out.saltCleared = S.settings.diary.salt === '';
+      out.backToSetup = document.getElementById('view-diary').textContent.indexOf('先设个密码') >= 0;
+      return out;
+    })()`);
+
+    ok('日记确实锁着（否则这段测的不是忘记密码）', reset.atLock);
+    ok('★ 锁屏上有「忘记密码」这条出路', reset.entryShown);
+    ok('它没有和「解锁」挤在同一排（防手滑）', reset.notNextToUnlock);
+    ok('点开有确认框，不是点了就删', reset.confirmShown);
+    ok('★ 确认框如实报出会丢多少（当前有 1 篇日记）', reset.confirmCount);
+    ok('★ 没确认之前什么都没删', reset.stillThere);
+    ok('★ 确认后密码被清掉', reset.wipedPassword);
+    eq('确认后日记内容清空', reset.wipedEntries, 0);
+    eq('谈话记录也清空', reset.wipedChats, 0);
+    eq('小结也清空', reset.wipedDigests, 0);
+    ok('盐也清了（不会再拿旧盐去校验）', reset.saltCleared);
+    ok('★ 回到「先设个密码」，日记重新可用', reset.backToSetup);
+    ok('密码没了就等于没设过', await s.evaluate('Diary.hasPassword()') === false);
+
   } catch (e) {
     fail++;
     console.log('  ✗ 流程中断：' + e.message);

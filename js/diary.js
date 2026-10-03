@@ -158,6 +158,19 @@
     return true;
   };
 
+  /** 存储里各有多少条记录。
+   *  **不需要密钥** —— 数的是密文条数，不是内容。
+   *  锁屏上的「忘记密码 → 重置」用它如实告诉用户会丢多少东西：
+   *  空库时说「现在是空的，重置不会丢任何东西」，
+   *  有内容时给出真实条数，而不是含糊的「所有数据」。 */
+  D.counts = function () {
+    return {
+      entries: S.all('diaryEntries').length,
+      chats: S.all('diaryChats').length,
+      digests: S.all('diaryDigests').length
+    };
+  };
+
   /* ═══════════ 明文缓存 ═══════════
      每次渲染都重新解密一轮在手机上会明显卡（PBKDF2 慢、AES 也不免费），
      所以解锁后第一次访问时一次性解密，之后走缓存。
