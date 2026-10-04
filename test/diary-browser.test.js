@@ -284,6 +284,83 @@ const FLOW = `(async () => {
     ok('★ 上锁的日记确实没进 AI 明文日志',
       await s.evaluate('S.all("aiLogs").filter(function(l){ return l.kind && l.kind.indexOf("diary") === 0; }).length === 0'));
 
+    /* ═══════════ 点开已写的日记：先「看」，再「改」 ═══════════
+       用户报的：「已经写好的 diary 居然点进去是从 0 开始修改？
+       不应该是可以看过去的日记，然后再是有一个修改按钮吗，
+       而且也应该是在原文基础上修改」。
+
+       两个 bug 叠在一起：
+         · 交互 —— 点一下直接进编辑态，没有「只想看看」的路，也没有修改按钮；
+         · 数据 —— 编辑框的底座是空的。根因在 U.el：
+           `<textarea>` 的 value **属性**在 HTML 里是被忽略的，
+           所以 `U.el('textarea', { value: 原文 })` 永远渲染成空白。
+           用户以为这天没写过，重写一遍就把原文盖掉了。
+
+       所以这段要同时盯住两件事：能读到原文、改的时候底座是原文。 */
+    console.log('\n── 点开已写的日记：先看原文，再在原文上改 ──');
+    const reading = await s.evaluate(`(async () => {
+      ${HELPERS}
+      const out = {};
+      await Diary.unlock(${JSON.stringify(PW)});
+      App.go('diary');
+      await sleep(500);
+
+      const v = document.getElementById('view-diary');
+      /* 列表里点那条日记 */
+      const row = [].slice.call(v.querySelectorAll('.card')).filter(function(c){
+        return c.textContent.indexOf('和家里吵架') >= 0; })[0];
+      out.foundEntry = !!row;
+      if (!row) return out;
+      row.click();
+      await sleep(500);
+
+      /* ① 此时应该是**阅读态**：原文完整可见，而且没有输入框 */
+      const body = document.getElementById('sheetBody');
+      /* ⚠️ 底部按钮挂在 #sheet 的 .sheet-foot 里，**不在 #sheetBody** ——
+         App.sheet 把 footer 单独 append 到 #sheet 上（这样它能贴底不跟着滚）。
+         所以找按钮要搜 #sheet，找内容才搜 #sheetBody。 */
+      const sheetEl = document.getElementById('sheet');
+      out.readText = (body.textContent || '').replace(/\\s+/g, ' ').slice(0, 80);
+      out.showsFullText = (body.textContent || '').indexOf('其实我知道是我不对') >= 0;
+      out.noTextareaYet = !body.querySelector('textarea');
+      out.hasEditBtn = !!btnByText(sheetEl, '修改');
+      out.hasDelBtn = !!btnByText(sheetEl, '删除');
+
+      /* ② 点「修改」→ 编辑框里必须是**原文**，不是空白 */
+      btnByText(sheetEl, '修改').click();
+      await sleep(600);
+      const ebody = document.getElementById('sheetBody');
+      const ta = ebody.querySelector('textarea');
+      out.taExists = !!ta;
+      out.taValue = ta ? ta.value : '(没有输入框)';
+      /* ③ 打开编辑框期间，自动锁必须被挂住（用户写日记时被锁过） */
+      out.holdWhileEditing = Diary.isLockHeld();
+
+      /* ④ 关掉之后要释放，正常的安全策略不能一直失效 */
+      btnByText(sheetEl, '取消').click();
+      await sleep(500);
+      out.holdAfterClose = Diary.isLockHeld();
+
+      /* 恢复成「锁着的」再交给下一段 —— 下面那段测的就是
+         「页面刚加载、日记锁着、一个密码字母都不输」能不能走出来，
+         这里不解锁回去它会失去前提。 */
+      Diary.lock();
+      App.go('diary');
+      await sleep(400);
+      return out;
+    })()`);
+
+    ok('列表里找得到那篇日记', reading.foundEntry);
+    ok('★ 点开先进入阅读态，能完整读到原文', reading.showsFullText, reading.readText);
+    ok('阅读态里没有输入框（不是直接进编辑）', reading.noTextareaYet);
+    ok('★ 阅读态底部有「修改」按钮', reading.hasEditBtn);
+    ok('阅读态底部也有「删除」', reading.hasDelBtn);
+    ok('点「修改」后出现编辑框', reading.taExists);
+    ok('★ 编辑框的底座是原文，不是空白（U.el textarea 的 value）',
+      reading.taValue === SECRET, reading.taValue);
+    ok('★ 打开编辑框时自动锁被挂住（写日记不会被锁）', reading.holdWhileEditing);
+    ok('★ 关掉编辑框后释放自动锁（安全策略恢复）', reading.holdAfterClose === false);
+
     /* ═══════════ 忘记密码：锁屏上必须真有一条出路 ═══════════
        这是用户真实卡住过的场景：设了密码、然后想不起来了。
        原来唯一的「清空整个日记」按钮藏在「设置」子页里，而那扇门要解锁才开

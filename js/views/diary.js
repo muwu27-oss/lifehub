@@ -38,7 +38,7 @@
   ];
 
   function curKey() {
-    return VS.key || Diary.keyOf(VS.gran, U.ymd(U.today()));
+    return VS.key || Diary.keyOf(VS.gran, Diary.dayKey());
   }
 
   function esc(s) { return U.esc(s); }
@@ -56,6 +56,11 @@
        还会出现两个一模一样的密码框，用户输的那个跟按钮读的那个不是同一个。
        （这个 bug 就是被 test/diary-browser.test.js 抓出来的。） */
     root.innerHTML = '';
+
+    /* 一天的口径改成 07:00→次日 07:00 之后，把以前凌晨写的那几条按新口径
+       重新归档一次。放在这里是因为它**不需要密钥**（date/createdAt 是明文），
+       所以锁着也能跑；只跑一次，有标记。 */
+    try { Diary.migrateDayBoundary(); } catch (e) { /* 迁移失败不能挡住进日记 */ }
 
     if (!Crypto.available()) return renderNoCrypto(root);
     if (!Diary.hasPassword()) return renderSetup(root);
@@ -254,7 +259,9 @@
     root.appendChild(U.el('div', { class: 'row', style: { marginBottom: '12px' } }, [
       U.el('button', {
         class: 'btn primary grow', text: '✍️ 写今天',
-        onclick: () => openEditor(U.ymd(U.today()))
+        /* 用日记口径的「今天」：早上 7 点前算前一天。
+           不然凌晨写日记会被归到第二天，和人的感觉反着来。 */
+        onclick: () => openEditor(Diary.dayKey())
       }),
       U.el('button', {
         class: 'btn ghost', style: { flexShrink: '0' }, text: '选日期',
@@ -308,7 +315,9 @@
         const preview = e.text.trim().replace(/\s+/g, ' ').slice(0, 52);
         root.appendChild(U.el('div', {
           class: 'card tight', style: { marginBottom: '8px', cursor: 'pointer' },
-          onclick: () => openEditor(e.date)
+          /* 点一条已写的日记先进**阅读态**，不是直接进编辑态。
+             用户要的就是「能看过去的日记，然后有个修改按钮」。 */
+          onclick: () => viewEntry(e.date)
         }, [
           U.el('div', { class: 'row', style: { justifyContent: 'space-between', marginBottom: '4px' } }, [
             U.el('span', { style: { fontSize: '12.5px', fontWeight: '600' }, text: U.friendly(e.date) }),
@@ -330,25 +339,93 @@
     return 'var(--danger)';
   }
 
-  /* ── 日期选择 ── */
-  function pickDate(onPick) {
+  /* ── 日期选择 ──
+     opts.hint 换掉说明文字（「改日期」和「补写」要说的不是一件事）；
+     opts.initial 指定初值，不传就是日记口径的今天。 */
+  function pickDate(onPick, opts) {
+    const o = opts || {};
     const inp = U.el('input', {
-      class: 'input', type: 'date', value: U.ymd(U.today()),
+      class: 'input', type: 'date', value: o.initial || Diary.dayKey(),
       onchange: e => { if (e.target.value) { App.closeSheet(); setTimeout(() => onPick(e.target.value), 260); } }
     });
-    App.sheet('选一个日期', [
+    App.sheet(o.title || '选一个日期', [
       U.el('p', { style: { fontSize: '13px', color: 'var(--text-dim)', marginTop: 0 },
-        text: '补写以前某天的日记。' }),
+        text: o.hint || '补写以前某天的日记。' }),
       App.field('日期', inp)
     ], { autofocus: false });
   }
 
-  /* ── 编辑器 ── */
+  /* ── 阅读态：先看，再决定改不改 ──
+     用户报的：「已经写好的日记点进去是从 0 开始修改？不应该是可以看过去的
+     日记，然后再是有一个修改按钮吗」。
+     这里就补上这条路：点一条日记先原样读出来，底部才给「修改」。
+     原文用 pre-wrap 保留换行 —— 日记是一行一段读的，合成一坨就没法看了。 */
+  async function viewEntry(date) {
+    const e = await Diary.entryOn(date);
+    /* 空条目没什么可看的，直接进编辑态（新建就是这条路径） */
+    if (!e || !e.text || !e.text.trim()) return openEditor(date);
+
+    const body = [
+      U.el('div', {
+        style: { fontSize: '12.5px', color: 'var(--text-dim)', marginTop: 0 },
+        text: U.friendly(date) + ' · ' + U.dowName(date)
+          + (e.mood != null ? ` · 心情 ${e.mood}/10` : '')
+      }),
+      U.el('div', {
+        style: {
+          fontSize: '14.5px', lineHeight: '1.85', marginTop: '14px',
+          whiteSpace: 'pre-wrap', wordBreak: 'break-word'
+        },
+        text: e.text.trim()
+      })
+    ];
+
+    const foot = [
+      U.el('button', {
+        class: 'btn danger', style: { flexShrink: '0' }, text: '删除',
+        onclick: () => App.confirm('删掉这天的日记？删了就没了。', async () => {
+          await Diary.removeEntry(e.id);
+          U.toast('已删除', 'ok');
+          Views.diary();
+        }, '删除')
+      }),
+      /* 归档错了总得能自己改回来。自动迁移只认「凌晨写的那天」，
+         如果一条日记就是白天写的但你想归到前一天，只有这里能改。 */
+      U.el('button', {
+        class: 'btn ghost', style: { flexShrink: '0' }, text: '改日期',
+        onclick: () => pickDate(to => {
+          if (to === date) return;
+          if (!Diary.reDateEntry(date, to)) {
+            return U.toast(to + ' 已经有日记了，一天只能一篇', 'err');
+          }
+          U.toast('已改到 ' + to, 'ok');
+          Views.diary();
+        }, {
+          title: '把这天的日记挪到别的日期',
+          hint: '日记的一天是从早上 7 点到次日早上 7 点。如果归档错了，可以在这里挪。',
+          initial: date
+        })
+      }),
+      U.el('button', {
+        class: 'btn primary grow', text: '修改',
+        onclick: () => openEditor(date)
+      })
+    ];
+
+    App.sheet(U.friendly(date), body, { footer: foot, autofocus: false });
+  }
+
+  /* ── 编辑器（修改已有内容时，底座是原文）── */
   async function openEditor(date) {
     const exist = await Diary.entryOn(date);
     VS.editDate = date;
     VS.editText = exist ? exist.text : '';
     VS.editMood = exist ? exist.mood : null;
+
+    /* 打开期间挂住自动锁：停下来想两分钟也该算「正在写」，
+         不然想事情的时候没有按键事件，会被当成无操作锁掉，
+         而草稿只在这个框里，锁一次就没了。 */
+    Diary.holdLock(true);
 
     /* 底部按钮的处理器会读这些，所以必须声明在 rebuild 外面（DEVLOG 里记过这个坑） */
     let text = VS.editText;
@@ -356,8 +433,16 @@
     const ta = U.el('textarea', {
       class: 'textarea', style: { minHeight: '220px' },
       placeholder: '今天怎么样？不用写得像作文。想到什么写什么，没人看。',
+      /* ⚠️ 这个 value 现在真的生效了。之前 U.el 对 textarea 用
+         setAttribute('value')，HTML 里 textarea 忽略这个属性，
+         所以框子永远是空的 —— 用户以为没写过，重写就盖掉了原文。
+         修在 utils.js 的 U.el 里（input 和 textarea 分开处理）。 */
       value: text,
-      oninput: e => { text = e.target.value; countBox.textContent = text.length + ' 字'; }
+      oninput: e => {
+        text = e.target.value;
+        countBox.textContent = text.length + ' 字';
+        Diary.touch();          // 打字本身就是活动，别让自动锁插进来
+      }
     });
     const countBox = U.el('div', {
       style: { fontSize: '11px', color: 'var(--text-faint)', textAlign: 'right', marginTop: '4px' },
@@ -368,7 +453,7 @@
     for (let i = 1; i <= 10; i++) {
       moodRow.appendChild(U.el('button', {
         class: 'chip' + (mood === i ? ' active' : ''), text: String(i),
-        onclick: () => { mood = (mood === i ? null : i); refreshMood(); }
+        onclick: () => { mood = (mood === i ? null : i); refreshMood(); Diary.touch(); }
       }));
     }
     function refreshMood() {
@@ -384,29 +469,21 @@
 
     const body = [
       U.el('p', { style: { fontSize: '12.5px', color: 'var(--text-dim)', marginTop: 0 },
-        text: U.friendly(date) + ' · ' + U.dowName(date) + (exist ? '（已有内容，改了会覆盖）' : '') }),
+        text: U.friendly(date) + ' · ' + U.dowName(date)
+          + (exist ? '（下面是原文，改完点保存）' : '') }),
       ta, countBox,
       U.el('div', { class: 'section-label', text: '当天心情（可选）' }),
       moodRow, moodLabel
     ];
 
+    /* 删除挪到阅读态了：编辑态是「正在改」，那儿放删除按钮容易误触，
+       而且用户要的流程是「先看 → 再决定改还是删」。 */
     const foot = [
-      exist ? U.el('button', {
-        class: 'btn danger', style: { flexShrink: '0' }, text: '删除',
-        onclick: () => App.confirm('删掉这天的日记？删了就没了。', async () => {
-          await Diary.removeEntry(exist.id);
-          App.closeSheet();
-          U.toast('已删除', 'ok');
-          Views.diary();
-        }, '删除')
-      }) : null,
       U.el('button', { class: 'btn ghost grow', text: '取消', onclick: () => App.closeSheet() }),
       U.el('button', {
         class: 'btn primary grow', text: '保存',
         onclick: async () => {
-          if (!text.trim()) {
-            if (!exist) return U.toast('还没写内容', 'err');
-          }
+          if (!text.trim() && !exist) return U.toast('还没写内容', 'err');
           try {
             await Diary.saveEntry(date, text, mood);
             App.closeSheet();
@@ -417,7 +494,11 @@
       })
     ];
 
-    App.sheet(U.friendly(date), body, { footer: foot, autofocus: false });
+    App.sheet(U.friendly(date), body, {
+      footer: foot, autofocus: false,
+      /* 不管从哪条路关掉（取消 / 保存 / 点遮罩 / 右上角），都要释放自动锁 */
+      onClose: () => Diary.holdLock(false)
+    });
     setTimeout(() => { try { ta.focus(); } catch (e) {} }, 300);
   }
 
@@ -435,7 +516,7 @@
 
   function rangeNav(onChange) {
     const k = curKey();
-    const todayKey = Diary.keyOf(VS.gran, U.ymd(U.today()));
+    const todayKey = Diary.keyOf(VS.gran, Diary.dayKey());
     const isNow = k === todayKey;
     return U.el('div', { class: 'row', style: { alignItems: 'center', marginBottom: '12px' } }, [
       U.el('button', {
@@ -1047,6 +1128,14 @@
 
     sec('日记', [
       p('一天一篇。点「写今天」写今天的，「选日期」可以补写以前某天。'),
+      /* 这一条是用户明确要求的口径，必须写进说明书，否则他自己都会记混 */
+      p('**一天是从早上 7 点到第二天早上 7 点**，不是午夜到午夜。'
+        + '也就是 10 月 3 号这一天 = 10/3 07:00 ～ 10/4 07:00 —— '
+        + '凌晨两三点写的东西算「还是昨天」，不会跳到第二天去。'),
+      p('点开一篇已经写好的日记，会先**原样读出来**给你看，底下有「修改」才进编辑。'
+        + '编辑框里是原文，改完点保存。旁边还能「改日期」（归档错了自己挪回来）和删除。'),
+      p('停着不动超过设定时间会自动上锁；**正在写的时候不会锁** —— '
+        + '停下来想事情也算「正在写」，草稿不会丢。'),
       p('右下角会记字数，当天心情可以顺手选一个 1~10 的分数，不选也行。'),
       p('写的东西保存时立刻加密，存储里只有乱码。')
     ]);
@@ -1055,8 +1144,14 @@
       p('分日 / 周 / 月 / 年四档。每档可以「生成小结」：AI 读一遍这段时间的日记，产出两样东西——'),
       U.el('div', { style: { marginBottom: '10px' } }, [
         U.el('div', { style: { fontSize: '12.5px', lineHeight: '1.7' }, text: '① 内容简概：客观地说你这段时间写了什么' }),
-        U.el('div', { style: { fontSize: '12.5px', lineHeight: '1.7' }, text: '② 想对你说的话：用朋友的口吻，不是医生口吻' })
+        U.el('div', { style: { fontSize: '12.5px', lineHeight: '1.7' }, text: '② 完整的分析：专业、客观、全面，不是安慰话' })
       ]),
+      p('**小结和「谈话」是两种不同的东西。** 小结是**分析者**：冷静、客观，把几个维度都看到，'
+        + '并且把日记（你写的）和手机里的客观数据（作息 / 饮食 / 任务 / 开销）**交叉验证** —— '
+        + '两者对不上时会直接点出来；还会指出和上一阶段相比什么在变好、什么在变差。'
+        + '「他可能没意识到的事」会写足 2~5 条，是整份小结里最值得看的部分。'),
+      p('而「谈话」那边是**朋友**：平等的、松弛的，可以调侃你，也不用照顾情绪。两边刻意分开。'),
+      p('小结不诊断、不贴标签（不会出现「抑郁症」这类词）—— 说的是状态和模式，不是病。'),
       p('另外会给六个维度打分（整体 / 情绪 / 精力 / 身体 / 学业 / 人际，满分 10）。小结会存下来，'
         + '所以「状态变化」那张图才画得出来 —— 它只画做过小结的期，没做的地方是断的，不会瞎补。'),
       p('样本太少时会黄字提醒。小于 40% 的覆盖率下那条线不该当成趋势看。')
@@ -1112,5 +1207,5 @@
     root.appendChild(U.el('div', { class: 'card' }, H));
   }
 
-  Views.diaryInternal = { VS, openEditor };
+  Views.diaryInternal = { VS, openEditor, viewEntry };
 })(window);

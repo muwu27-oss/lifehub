@@ -150,6 +150,17 @@
           } else node.innerHTML = v;
         }
         else if (k === 'text') node.textContent = v;
+        /* ⚠️ value 必须区分元素类型。
+           `<textarea>` 的 value **属性**在 HTML 里是被忽略的 —— 它的内容来自
+           子文本节点，setAttribute('value') 什么都不会发生（静默失效）。
+           <input> 反而正是靠 value 属性工作的，所以不能一刀切。
+           真实事故：日记编辑框 `U.el('textarea', { value: 原文 })` 打开永远是空白，
+           用户以为这天没写过，重新写一遍就把原文盖掉了。
+           plan.js 里备注框的写法（先建元素、再 `el.value = ...`）才是对的。 */
+        else if (k === 'value') {
+          if (tag === 'textarea') node.value = v;
+          else node.setAttribute('value', v);
+        }
         else if (k === 'style' && typeof v === 'object') Object.assign(node.style, v);
         else if (k.startsWith('on') && typeof v === 'function') node.addEventListener(k.slice(2), v);
         else if (k === 'dataset') Object.assign(node.dataset, v);

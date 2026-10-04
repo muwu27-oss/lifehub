@@ -829,6 +829,10 @@
       if (!Diary.isUnlocked()) return;
       const mins = Number(S.settings.diary.autoLockMinutes);
       if (!mins || mins <= 0) return;
+      /* 正在写日记就别锁。草稿只活在编辑框里，锁一次就没了 ——
+         「停下来想两分钟」没有按键事件，光靠 touch 兜不住。
+         详见 diary.js 里 holdLock 的注释。 */
+      if (Diary.isLockHeld && Diary.isLockHeld()) return;
       if (Date.now() - Diary.lastActive() > mins * 60000) {
         Diary.lock();
         if (App.current === 'diary') { App.go('diary'); U.toast('已自动上锁', 'info'); }
@@ -952,7 +956,7 @@
 
   /* 界面上的版本号。改功能时和 sw.js 的 VERSION 一起改。
      手机上「改了没生效」的时候，先来这里看是不是旧版。 */
-  App.VERSION = 'v19';
+  App.VERSION = 'v20';
 
   global.App = App;
 

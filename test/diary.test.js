@@ -366,6 +366,108 @@ ok('生日类偏弱', Diary.passwordHint('20060315').level !== 'strong');
 ok('长且混合的算强', Diary.passwordHint('Xk7#mQ2pLw9z').level === 'strong',
   JSON.stringify(Diary.passwordHint('Xk7#mQ2pLw9z')));
 
+console.log('\n=== 20. 一天的口径：07:00 → 次日 07:00 ===');
+/* 用户的原话：「我希望更改一篇日记的时间范围，比如说10月3号，
+   就应该是3号早上7点-第二天4号早上7点前，这个范围里提交的日记是归于10月3号」。
+   边界值最容易写错，所以两头都卡死。 */
+const at = (s) => new Date(s);
+eq('10/3 早上 6:59 算 10/2（前一天）', Diary.dayKey(at('2026-10-03T06:59:00')), '2026-10-02');
+eq('10/3 早上 7:00 算 10/3（新一天开始）', Diary.dayKey(at('2026-10-03T07:00:00')), '2026-10-03');
+eq('10/3 中午算 10/3', Diary.dayKey(at('2026-10-03T12:00:00')), '2026-10-03');
+eq('10/3 晚上 23:59 算 10/3', Diary.dayKey(at('2026-10-03T23:59:00')), '2026-10-03');
+eq('★ 10/4 凌晨 0:30 仍算 10/3', Diary.dayKey(at('2026-10-04T00:30:00')), '2026-10-03');
+eq('★ 10/4 早上 6:59 仍算 10/3', Diary.dayKey(at('2026-10-04T06:59:00')), '2026-10-03');
+eq('★ 10/4 早上 7:00 才翻到 10/4', Diary.dayKey(at('2026-10-04T07:00:00')), '2026-10-04');
+ok('不传参数就用现在', /^\d{4}-\d{2}-\d{2}$/.test(Diary.dayKey()));
+eq('边界常量是 7 点', Diary.DAY_START_HOUR, 7);
+eq('11/1 凌晨 1 点算 10/31（跨月也要对）', Diary.dayKey(at('2026-11-01T01:00:00')), '2026-10-31');
+
+console.log('\n=== 21. 归档：迁移与手动改日期 ===');
+S.reset(); S.init();
+Diary.lock();
+await Diary.setup('迁移测试密码123');
+
+/* 造三条：凌晨写的（新口径该往前挪一天）、白天写的（不动）、
+   以及一条「手动补写以前某天」的（createdAt 和 date 不同，绝不能被迁移碰） */
+S.add('diaryEntries', {
+  date: '2026-10-04', iv: 'x', ct: 'y', createdAt: '2026-10-04T01:30:00'
+});
+S.add('diaryEntries', {
+  date: '2026-10-05', iv: 'x', ct: 'y', createdAt: '2026-10-05T15:00:00'
+});
+S.add('diaryEntries', {
+  date: '2026-09-01', iv: 'x', ct: 'y', createdAt: '2026-10-05T15:00:00'
+});
+/* 那天的日粒度小结和谈话，迁移时要跟着走 */
+S.add('diaryDigests', { gran: 'day', key: '2026-10-04', iv: 'x', ct: 'y' });
+S.add('diaryChats', { gran: 'day', key: '2026-10-04', iv: 'x', ct: 'y' });
+
+const moved = Diary.migrateDayBoundary();
+eq('★ 凌晨写的那条被挪到 10/3', moved, 1);
+ok('10/4 已经没有日记了',
+  !S.all('diaryEntries').some(r => r.date === '2026-10-04'));
+ok('★ 它现在在 10/3',
+  S.all('diaryEntries').some(r => r.date === '2026-10-03'));
+ok('白天写的那条没被动',
+  S.all('diaryEntries').some(r => r.date === '2026-10-05'));
+ok('★ 手动补写的以前某天没被动（最危险的一种误伤）',
+  S.all('diaryEntries').some(r => r.date === '2026-09-01'));
+ok('小结的 key 跟着挪到了 10/3',
+  S.all('diaryDigests').some(r => r.gran === 'day' && r.key === '2026-10-03'));
+ok('谈话的 key 也跟着挪了',
+  S.all('diaryChats').some(r => r.gran === 'day' && r.key === '2026-10-03'));
+eq('迁移只跑一次（第二次返回 0）', Diary.migrateDayBoundary(), 0);
+
+/* 手动改日期 */
+eq('手动把 10/5 挪到 10/6', Diary.reDateEntry('2026-10-05', '2026-10-06'), true);
+ok('挪过去了', S.all('diaryEntries').some(r => r.date === '2026-10-06'));
+ok('原来那天空了', !S.all('diaryEntries').some(r => r.date === '2026-10-05'));
+eq('★ 目标已有日记时拒绝，不覆盖', Diary.reDateEntry('2026-10-03', '2026-10-06'), false);
+eq('挪到自己是空操作', Diary.reDateEntry('2026-10-06', '2026-10-06'), false);
+eq('挪一条不存在的日期返回 false', Diary.reDateEntry('2020-01-01', '2020-01-02'), false);
+ok('★ 拒绝之后目标那条还在，没被覆盖',
+  S.all('diaryEntries').some(r => r.date === '2026-10-06'));
+
+console.log('\n=== 22. 小结是「分析」，谈话是「朋友」——两套人设必须分开 ===');
+/* 用户的原话：「我觉得的 ai 总结和谈话是两种定位……主要是小结，
+   不应该也是朋友，而是专业的心理 ai 专家的客观分析」。
+   这里盯住：两套提示词不能又混成一套。 */
+S.reset(); S.init();
+Diary.lock();
+await Diary.setup('人设测试密码123');
+await Diary.saveEntry('2026-10-01', '今天有点累', 5);
+await Diary.saveEntry('2026-10-02', '还行', 6);
+
+const dp = await Diary.buildDigestPrompt('day', '2026-10-01', []);
+ok('小结提示词里不再要求「朋友的口吻」', !/朋友的口吻/.test(dp));
+ok('★ 小结不再限 150 字', !/150\s*字/.test(dp), '150 字上限又回来了');
+ok('小结要求交叉验证和指出变化', /交叉验证/.test(dp) && /变化/.test(dp));
+ok('小结要求扩展「没意识到的事」', /2~5条/.test(dp));
+/* 安全边界写在 system 人设里（不在 user 提示词里），所以要查人设本身 */
+ok('★ 小结的人设守住了「不诊断/不贴标签」',
+  /不诊断/.test(Diary.personas.analyst) && /不贴标签/.test(Diary.personas.analyst));
+/* 最关键的一条：两套人设必须真的是两套，不能又混回一套 */
+ok('★ 小结和谈话用的是两套不同的人设',
+  Diary.personas.analyst !== Diary.personas.friend
+  && Diary.personas.analyst.length > 100 && Diary.personas.friend.length > 100);
+ok('谈话的人设仍然是「朋友」（用户说谈话不用改）',
+  /老朋友/.test(Diary.personas.friend));
+ok('小结的人设不再是朋友，是分析者', !/老朋友/.test(Diary.personas.analyst));
+ok('小结人设要求覆盖多个维度',
+  /情绪/.test(Diary.personas.analyst) && /精力/.test(Diary.personas.analyst)
+  && /作息/.test(Diary.personas.analyst));
+
+/* 解析：长 review 不能被静默截断，noticed 要能装下 5 条 */
+const fake = {
+  brief: 'b', review: 'x'.repeat(5000),
+  mood: 5, emotion: 5, energy: 5, body: 5, study: 5, social: 5,
+  keywords: ['a'],
+  noticed: ['n1', 'n2', 'n3', 'n4', 'n5', 'n6']
+};
+const pdLong = Diary.parseDigest(JSON.stringify(fake));
+eq('★ review 不再被截断（5000 字原样留下）', pdLong.review.length, 5000);
+eq('noticed 最多 5 条', pdLong.noticed.length, 5);
+
 console.log('\n─────────────────────────────');
 console.log('日记模块: ' + pass + ' 通过, ' + fail + ' 失败');
 process.exit(fail ? 1 : 0);

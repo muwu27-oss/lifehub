@@ -28,6 +28,22 @@
   D.touch = function () { lastActive = Date.now(); };
   D.lastActive = function () { return lastActive; };
 
+  /* ── 正在写东西时，挂住自动锁 ──
+     用户报的：「5 分钟无操作就锁住，在我写日记的时候都会触发」。
+     根因是 lastActive 只在存/解/锁这些动作上更新，**打字不算操作**，
+     所以写着写着就被锁了 —— 而草稿只在那个输入框里，锁一次就没了。
+
+     修了两层：
+       ① 编辑器每次输入都 touch()，正在打字的人绝不会被锁；
+       ② 打开编辑器期间整段 hold 住 —— 因为「停下来想两分钟」也不该算
+          「无操作」，而想的时候是没有按键事件的。
+     关掉编辑框（不管怎么关）就释放，正常的安全策略不受影响。
+     代价是：把编辑框开着撂下不管，会一直不锁。但丢一篇刚写完的日记
+     比这个严重得多，所以往「别丢」这边倒。 */
+  let lockHeld = false;
+  D.holdLock = function (on) { lockHeld = !!on; if (lockHeld) D.touch(); };
+  D.isLockHeld = function () { return lockHeld; };
+
   /* ═══════════ 密码 ═══════════ */
 
   const cfg = () => S.settings.diary;
@@ -228,7 +244,106 @@
     return c.bad;
   };
 
+  /* ── 一天的边界是早上 7 点，不是午夜 ──
+     凌晨两三点写的东西，人的感觉是「还是昨晚那一天」，不是「第二天」。
+     所以 10/3 这一天 = 10/3 07:00 ～ 10/4 07:00，
+     在这个区间里提交的日记都归到 10/3。
+
+     为什么是 7 点：正常作息里 7 点前基本都算「还没睡，还是前一天」，
+     跨过 7 点才算新的一天。用户明确要的就是这个范围。
+
+     ⚠️ 这个边界**只在这里定义一次**：「写今天」按钮和把历史数据
+     重新归档的迁移都调它。两处各写一份迟早会漂。 */
+  D.DAY_START_HOUR = 7;
+
+  /** 某个时刻属于哪一天（日记口径）。不传就是现在。 */
+  D.dayKey = function (when) {
+    const d = when == null ? new Date() : new Date(when);
+    if (isNaN(d.getTime())) return U.ymd(U.today());
+    /* 没到 7 点 → 算前一天 */
+    return U.ymd(d.getHours() < D.DAY_START_HOUR ? U.addDays(d, -1) : d);
+  };
+
   /* ═══════════ 日记条目 ═══════════ */
+
+  /** 把一条日记挪到另一天（连同那天的日粒度小结/谈话）。
+   *  用于「归档错了，我自己改回来」。一天一篇，目标已有内容时拒绝，不覆盖。 */
+  D.reDateEntry = function (from, to) {
+    if (!from || !to || from === to) return false;
+    const rec = (S.all('diaryEntries') || []).find(r => r.date === from);
+    if (!rec) return false;
+    const clash = (S.all('diaryEntries') || []).some(r => r.id !== rec.id && r.date === to);
+    if (clash) return false;
+    S.update('diaryEntries', rec.id, { date: to });
+    moveDayKeys(from, to);
+    cache = null;
+    S.saveNow();
+    return true;
+  };
+
+  /** 日粒度的小结和谈话跟着日记一起搬 key，否则它们会指向一个空日子 */
+  function moveDayKeys(from, to) {
+    ['diaryDigests', 'diaryChats'].forEach(coll => {
+      (S.all(coll) || []).forEach(r => {
+        if (r.gran !== 'day' || r.key !== from) return;
+        const taken = (S.all(coll) || [])
+          .some(x => x.id !== r.id && x.gran === 'day' && x.key === to);
+        if (taken) return;
+        S.update(coll, r.id, { key: to });
+      });
+    });
+  }
+
+  /* ── 一次性迁移：把「凌晨写的」日记按新口径重新归档 ──
+     一天的口径从「午夜→午夜」改成了「07:00→次日 07:00」。
+     改之前，10/4 凌晨 1 点写的日记存成了 10/4；按新口径它属于 10/3。
+     这里把历史数据也对齐，否则日历上会留着一条错位的记录。
+
+     ⚠️ 这个函数会改用户的数据，所以条件卡得很死：
+       · 只动 `date === createdAt 当天` 的 —— 这证明它是**自动记成那天**的，
+         而不是用户手动「选日期」补写的（补写的 createdAt 和 date 本来就不同）；
+       · 只动 createdAt 落在当天 07:00 之前的；
+       · 目标日期已经有日记就**不动**（一天一篇，撞了宁可不搬也不能覆盖）；
+       · 只跑一次，用 settings 标记。
+
+     不需要密钥：date 和 createdAt 都是明文，不用解密。 */
+  D.migrateDayBoundary = function () {
+    const dcfg = S.settings.diary;
+    if (dcfg.dayBoundaryMigrated === 1) return 0;
+
+    const list = S.all('diaryEntries') || [];
+    const movedMap = {};
+    let moved = 0;
+
+    list.slice().forEach(r => {
+      if (!r.createdAt || !r.date) return;
+      const at = new Date(r.createdAt);
+      if (isNaN(at.getTime())) return;
+      if (at.getHours() >= D.DAY_START_HOUR) return;   // 不是凌晨写的，不关它的事
+      if (U.ymd(at) !== r.date) return;                // 手动补写的，一律不碰
+      const target = U.ymd(U.addDays(at, -1));
+      if (!target || target === r.date) return;
+      const taken = (S.all('diaryEntries') || [])
+        .some(x => x.id !== r.id && x.date === target);
+      if (taken) return;
+      /* ⚠️ 必须在 S.update 之前把旧日期存下来。
+         S.update 改的就是**同一个对象**（S.find 返回的是存储里那个引用），
+         改完 r.date 已经是新值了 —— 之后再把 r.date 当 key 记进 movedMap，
+         记的就是「新 → 新」，moveDayKeys 永远找不到要搬的小结和谈话。
+         这个坑和 store.remove 那个是同一类：对象是引用，不是快照。 */
+      const fromDate = r.date;
+      S.update('diaryEntries', r.id, { date: target });
+      movedMap[fromDate] = target;
+      moved++;
+    });
+
+    Object.keys(movedMap).forEach(from => moveDayKeys(from, movedMap[from]));
+
+    dcfg.dayBoundaryMigrated = 1;
+    cache = null;
+    S.saveNow();
+    return moved;
+  };
 
   D.entries = async function () { return (await loadCache()).entries; };
 
@@ -692,6 +807,48 @@
 7. 长度自然。有时一两句就够。不要为了显得认真而硬写长。
 8. 用 Markdown，但克制：最多几个短句或一两个短点，不要堆小标题。`;
 
+  /* ── 小结的人设：专业、客观、全面 ──
+     用户的原话：「我觉得的 ai 总结和谈话是两种定位……小结不应该也是朋友，
+     而是专业的心理 ai 专家的客观分析，并且要全面」
+     「那个'他可能没有意识到的'这个部分很好，内容篇幅也可以扩展」。
+
+     所以小结和谈话**刻意用两套人设**：
+       · 谈话 = SYS_FRIEND，平等的朋友，松弛、可以调侃；
+       · 小结 = SYS_ANALYST，冷静的分析者，不照顾情绪，要全面。
+
+     仍然不诊断、不贴标签 —— 这不是风格选择：没有诊断资质，
+     而且用户明确说了「我不是以病人的身份」。
+     「专业」体现在**观察密度、交叉验证、结构化**上，不是体现在术语上。 */
+  const SYS_ANALYST = `你是一位受过系统训练的心理评估分析者，长期跟踪这位用户的日记。
+你们不是朋友，你也不需要照顾他的情绪；你的职责是**如实、全面、有条理地分析**。
+他不需要安慰，他要知道的是「我自己没看清的东西，被人看清了」。
+
+分析方式（硬要求，不是风格建议）：
+1. 客观优先：先陈述观察到的**事实和证据**，再给判断。
+   每条判断都必须能追溯到具体某一天或某个数据，不许凭空下结论。
+2. 全面覆盖，别只谈情绪。至少都要看到：心情与情绪、精力与疲劳、
+   身体与作息、学业／项目推进、人际与支持，以及这几者之间的**相互关系**。
+   比如「连续三天 1 点后睡 → 那三天的日记都只有一两行 → 精力跟着掉」
+   是一条链，要把它说出来，而不是三件事各说一句。
+3. 交叉验证：日记是他自己写的（主观），客观记录来自他手机（作息／饮食／任务／开销）。
+   两者一致，说明可信；**两者不一致必须点出来** ——
+   比如他说「这周还好」，但任务在堆积、睡眠在下滑。
+4. 指出**变化**：和上一阶段比，什么在好转、什么在变差、什么一直没动。
+   趋势比单点重要。
+5. 不确定就明说不确定。证据不足时写清楚「这段时间只有两篇，判断仅供参考」，
+   不要用好听的措辞掩盖信息量不够。
+6. 不诊断、不贴标签。不出现"抑郁症""焦虑症""内耗型人格"这类词，也不下医学结论。
+   你分析的是**状态和模式**，不是病。
+7. 不安慰、不鼓励、不说"你已经很棒了"。有问题就直接指出，语气平实，不必软化。
+8. 可以直接点出他的盲点、回避和自相矛盾的地方 —— 这正是他请你看的。
+
+篇幅：**不要吝啬**。该展开就展开，宁可多写两段有内容的，
+也不要为了简短把重要的观察省掉。用 Markdown，小标题 + 短段落，方便他自己回看。`;
+
+  /* 暴露给测试：要能验证「两套人设确实是分开的、而且各自守住了该守的边界」。
+     谈话用 friend，小结用 analyst —— 用户明确要求这是两种定位。 */
+  D.personas = { friend: SYS_FRIEND, analyst: SYS_ANALYST };
+
   /** 把一段日记渲染成给 AI 看的文本 */
   function renderEntries(list, opts) {
     const o = opts || {};
@@ -793,7 +950,10 @@
     L.push('');
     L.push('{');
     L.push('  "brief": "他这段时间写了什么。客观简概，2~4 句。只陈述，不评价，不要煽情。",');
-    L.push('  "review": "你想对他说的话。用上面那个朋友的口吻，可以直接跟他说话。Markdown，控制在 150 字以内。",');
+    /* 原来这里是「用朋友的口吻，150 字以内」—— 用户反馈「篇幅有点少」，
+       而且定位也变了：小结是分析，不是朋友闲聊。所以去掉字数上限，
+       并要求按 SYS_ANALYST 那 8 条展开写。 */
+    L.push('  "review": "完整的分析，就是这份小结的主体。按上面那 8 条要求展开写：先事实后判断、各维度都要覆盖、日记和客观数据交叉验证、指出与上一阶段相比的变化。用 Markdown 小标题分段。**不要压字数，300~700 字**，宁可长也不要省掉重要观察。",');
     L.push('  "mood": 1到10的整数,   // 整体状态。5 = 平常，7 = 不错，3 = 明显低落');
     L.push('  "emotion": 1到10的整数, // 情绪稳定度与心情');
     L.push('  "energy": 1到10的整数,  // 精力 / 疲劳程度');
@@ -801,7 +961,7 @@
     L.push('  "study": 1到10的整数,   // 学业 / 项目推进');
     L.push('  "social": 1到10的整数,  // 人际 / 情绪支持');
     L.push('  "keywords": ["最多5个短词"],');
-    L.push('  "noticed": ["1~3条他自己可能没意识到的事。没有就给空数组。"]');
+    L.push('  "noticed": ["2~5条他自己可能没意识到的事。每条都要写具体：现象 + 你看到的证据 + 这可能意味着什么。没有就给空数组。"]');
     L.push('}');
     L.push('');
     L.push('评分规则（重要）：');
@@ -809,6 +969,7 @@
     L.push('- 数据不足时（比如整段时间只有一篇日记），在 brief 里说明，评分往 5 靠。');
     L.push('- noticed 只写**有证据**的，比如「连着三天 1 点后睡，那三天的日记都只有一两行」。');
     L.push('  不要写"你需要多休息"这种没有信息量的话。没有就交空数组。');
+    L.push('- noticed 是这份小结里他最有价值的部分 —— 写足、写具体，别只写一条敷衍。');
     return L.join('\n');
   };
 
@@ -830,11 +991,15 @@
     };
     const out = {
       brief: String(o.brief || '').slice(0, 1200),
-      review: String(o.review || '').slice(0, 3000),
+      /* 上限放到 6000 字：小结现在要求展开写，原来的 3000 会把它拦腰截断，
+         而且截断是**静默**的 —— 用户只会觉得「怎么突然断了」。 */
+      review: String(o.review || '').slice(0, 6000),
       keywords: (Array.isArray(o.keywords) ? o.keywords : [])
         .map(x => String(x).slice(0, 12)).filter(Boolean).slice(0, 5),
+      /* noticed 从 3 条 × 200 字放到 5 条 × 400 字：用户明确说这部分很好，
+         希望内容扩展。 */
       noticed: (Array.isArray(o.noticed) ? o.noticed : [])
-        .map(x => String(x).slice(0, 200)).filter(Boolean).slice(0, 3)
+        .map(x => String(x).slice(0, 400)).filter(Boolean).slice(0, 5)
     };
     D.DIMS.forEach(d => { out[d.id] = num(o[d.id]); });
     if (!out.brief && !out.review) throw new Error('AI 没给出小结内容');
@@ -857,9 +1022,13 @@
     const c = D.aiCfg();
     const prompt = await D.buildDigestPrompt(gran, k, chats);
     const raw = await AI.chat([
-      { role: 'system', content: SYS_FRIEND + '\n\n（这次你要输出 JSON，但 review 里说话还是这个口吻。）' },
+      /* 这里用分析者人设，不是朋友 —— 小结的定位是客观全面的分析。
+         谈话仍然走 SYS_FRIEND（见 buildChatMessages），两套刻意分开。 */
+      { role: 'system', content: SYS_ANALYST + '\n\n（这次的输出是 JSON，但 review 字段里就是上面要求的那种分析文字。）' },
       { role: 'user', content: prompt }
-    ], { cfg: c, temperature: 0.5, json: true, maxTokens: 1800, timeoutMs: 180000 });
+      /* maxTokens 1800 → 4000：小结篇幅放开了，1800 装不下 300~700 字的分析
+         外加评分和 noticed，会在半句上被切断。 */
+    ], { cfg: c, temperature: 0.5, json: true, maxTokens: 4000, timeoutMs: 180000 });
     return D.parseDigest(raw);
   };
 
