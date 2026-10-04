@@ -290,7 +290,7 @@
       ]),
       st.first ? U.el('div', {
         style: { fontSize: '11px', color: 'var(--text-faint)', marginTop: '8px' },
-        text: `${st.first} 开始写 · 最近一次 ${st.last}`
+        text: `${Diary.dateText(st.first)} 开始写 · 最近一次 ${Diary.dateText(st.last)}`
       }) : null
     ]));
 
@@ -320,7 +320,7 @@
           onclick: () => viewEntry(e.date)
         }, [
           U.el('div', { class: 'row', style: { justifyContent: 'space-between', marginBottom: '4px' } }, [
-            U.el('span', { style: { fontSize: '12.5px', fontWeight: '600' }, text: U.friendly(e.date) }),
+            U.el('span', { style: { fontSize: '12.5px', fontWeight: '600' }, text: Diary.dateText(e.date) }),
             e.mood != null ? U.el('span', {
               style: { fontSize: '11.5px', color: moodColor(e.mood) }, text: `心情 ${e.mood}/10`
             }) : U.el('span', {})
@@ -368,7 +368,7 @@
     const body = [
       U.el('div', {
         style: { fontSize: '12.5px', color: 'var(--text-dim)', marginTop: 0 },
-        text: U.friendly(date) + ' · ' + U.dowName(date)
+        text: Diary.dateText(date)
           + (e.mood != null ? ` · 心情 ${e.mood}/10` : '')
       }),
       U.el('div', {
@@ -412,7 +412,7 @@
       })
     ];
 
-    App.sheet(U.friendly(date), body, { footer: foot, autofocus: false });
+    App.sheet(Diary.dateTextRel(date), body, { footer: foot, autofocus: false });
   }
 
   /* ── 编辑器（修改已有内容时，底座是原文）── */
@@ -469,8 +469,8 @@
 
     const body = [
       U.el('p', { style: { fontSize: '12.5px', color: 'var(--text-dim)', marginTop: 0 },
-        text: U.friendly(date) + ' · ' + U.dowName(date)
-          + (exist ? '（下面是原文，改完点保存）' : '') }),
+        text: Diary.dateText(date)
+          + (exist ? ' · 下面是原文，改完点保存' : ' · 新的一天') }),
       ta, countBox,
       U.el('div', { class: 'section-label', text: '当天心情（可选）' }),
       moodRow, moodLabel
@@ -494,7 +494,7 @@
       })
     ];
 
-    App.sheet(U.friendly(date), body, {
+    App.sheet(Diary.dateTextRel(date), body, {
       footer: foot, autofocus: false,
       /* 不管从哪条路关掉（取消 / 保存 / 点遮罩 / 右上角），都要释放自动锁 */
       onClose: () => Diary.holdLock(false)
@@ -554,7 +554,7 @@
           U.el('span', { class: 'section-label', style: { margin: 0 }, text: '这一期的小结' }),
           U.el('span', {
             style: { fontSize: '10.5px', color: 'var(--text-faint)' },
-            text: digest.createdAt ? digest.createdAt.slice(0, 10) : ''
+            text: digest.createdAt ? Diary.dateText(digest.createdAt.slice(0, 10)) : ''
           })
         ]),
 
@@ -772,7 +772,7 @@
             U.el('span', { style: { fontSize: '12px', fontWeight: '600' },
               text: (c.messages || []).length ? ((c.messages.filter(m => m.role === 'user')[0] || {}).content || '').slice(0, 24) : '（空）' }),
             U.el('span', { style: { fontSize: '10.5px', color: 'var(--text-faint)' },
-              text: c.createdAt ? c.createdAt.slice(0, 10) : '' })
+              text: c.createdAt ? Diary.dateText(c.createdAt.slice(0, 10)) : '' })
           ]),
           U.el('div', { style: { fontSize: '11.5px', color: 'var(--text-dim)', lineHeight: '1.5' },
             text: last ? String(last.content).replace(/\s+/g, ' ').slice(0, 60) + '…' : '' })
@@ -1137,6 +1137,9 @@
       p('停着不动超过设定时间会自动上锁；**正在写的时候不会锁** —— '
         + '停下来想事情也算「正在写」，草稿不会丢。'),
       p('右下角会记字数，当天心情可以顺手选一个 1~10 的分数，不选也行。'),
+      p('列表和标题里的日期都写到**号**（10月3日 周六），周 / 月 / 年档也会把'
+        + '覆盖的起止日子写出来（比如「9月第4周（9月28日–10月4日）」），'
+        + '方便和日历对。'),
       p('写的东西保存时立刻加密，存储里只有乱码。')
     ]);
 

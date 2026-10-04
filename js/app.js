@@ -956,7 +956,7 @@
 
   /* 界面上的版本号。改功能时和 sw.js 的 VERSION 一起改。
      手机上「改了没生效」的时候，先来这里看是不是旧版。 */
-  App.VERSION = 'v20';
+  App.VERSION = 'v21';
 
   global.App = App;
 

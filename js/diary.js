@@ -461,19 +461,57 @@
   };
 
   /** 人类可读的区间名 */
+  /* ── 日期一律带上「号数」 ──
+     用户的要求：「这个页面我希望可以看到具体的日期，精确到号数，
+     后面年月周也是一样，精确到号」。
+
+     U.friendly() 对最近几天只返回「今天 / 昨天 / 前天」——
+     看着亲切，但**完全看不到是几号**，翻日记时对不上日历。
+     所以日记版块单独用这两个：
+       · dateText    —— 10月3日 周六
+       · dateTextRel —— 昨天 · 10月3日 周六（相对说法留着，但一定带号）
+     ⚠️ 只改日记版块，不动 U.friendly —— 它全 App 都在用，
+     任务列表那种地方「昨天」就够，加上号数反而啰嗦。 */
+  D.dateText = function (date) {
+    const d = U.parse(date);
+    if (!d) return String(date == null ? '' : date);
+    const y = d.getFullYear() !== new Date().getFullYear() ? `${d.getFullYear()}年` : '';
+    return `${y}${d.getMonth() + 1}月${d.getDate()}日 ${U.dowName(d)}`;
+  };
+
+  D.dateTextRel = function (date) {
+    const f = U.friendly(date);
+    /* friendly 已经带号数（不是最近几天）就不用再补 */
+    if (/月\d+日/.test(f)) return f;
+    return `${f} · ${D.dateText(date)}`;
+  };
+
+  /** 区间文字，精确到号。跨年时补上年份。 */
+  D.rangeText = function (gran, k) {
+    const r = D.range(gran, k);
+    if (!r || !r.start || !r.end) return '';
+    const a = U.parse(r.start), b = U.parse(r.end);
+    if (!a || !b) return '';
+    const cross = a.getFullYear() !== b.getFullYear();
+    const f = d => (cross ? `${d.getFullYear()}年` : '') + `${d.getMonth() + 1}月${d.getDate()}日`;
+    return `${f(a)}–${f(b)}`;
+  };
+
   D.label = function (gran, k) {
-    if (gran === 'day') return U.friendly(k);
+    if (gran === 'day') return D.dateTextRel(k);
     if (gran === 'week') {
       const r = D.range('week', k);
-      const a = U.parse(r.start), b = U.parse(r.end);
+      const a = U.parse(r.start);
       const wk = Math.floor((a.getDate() - 1) / 7) + 1;
-      return `${a.getMonth() + 1}月第${wk}周（${a.getMonth() + 1}/${a.getDate()}–${b.getMonth() + 1}/${b.getDate()}）`;
+      /* 原来写的是 10/3–10/9 这种斜杠式，和别处的中文日期不一致，
+         现在补齐号数写法 */
+      return `${a.getMonth() + 1}月第${wk}周（${D.rangeText('week', k)}）`;
     }
     if (gran === 'month') {
       const [y, m] = String(k).split('-').map(Number);
-      return `${y}年${m}月`;
+      return `${y}年${m}月（${D.rangeText('month', k)}）`;
     }
-    if (gran === 'year') return `${k}年`;
+    if (gran === 'year') return `${k}年（${D.rangeText('year', k)}）`;
     return k;
   };
 

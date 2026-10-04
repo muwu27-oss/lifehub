@@ -172,7 +172,8 @@ eq('周往前一格跨月', D.shift('week', '2026-10-05', -1), '2026-09-28');
 eq('年往前一格', D.shift('year', '2026', -1), '2025');
 
 ok('月标签是人话', /2026年10月/.test(D.label('month', '2026-10')), D.label('month', '2026-10'));
-ok('周标签带日期范围', /9\/28/.test(D.label('week', '2026-09-28')), D.label('week', '2026-09-28'));
+ok('周标签带日期范围', /9月28日–10月4日/.test(D.label('week', '2026-09-28')),
+  D.label('week', '2026-09-28'));
 
 console.log('\n=== 9. 区间取样（不能把相邻区间的内容混进来） ===');
 S.reset(); S.init();
@@ -467,6 +468,42 @@ const fake = {
 const pdLong = Diary.parseDigest(JSON.stringify(fake));
 eq('★ review 不再被截断（5000 字原样留下）', pdLong.review.length, 5000);
 eq('noticed 最多 5 条', pdLong.noticed.length, 5);
+
+console.log('\n=== 23. 日期一律显示到「号」 ===');
+/* 用户的要求：「这个页面我希望可以看到具体的日期，精确到号数，
+   后面年月周也是一样，精确到号」。
+   断言要**日期稳定** —— 不能因为明天「昨天」变成「前天」就红，
+   所以盯的是「有没有号数」，不是相对词。 */
+ok('★ 日：一定带号数', /10月3日/.test(Diary.dateText('2026-10-03')),
+  Diary.dateText('2026-10-03'));
+ok('日：也带星期', /周[一二三四五六日]/.test(Diary.dateText('2026-10-03')),
+  Diary.dateText('2026-10-03'));
+ok('日：不是今年才补年份', !/2026年/.test(Diary.dateText('2026-10-03')));
+ok('日：往年的会补上年份', /2025年/.test(Diary.dateText('2025-10-03')));
+
+/* 关键回归：U.friendly 对最近几天只给「昨天」，完全看不到号 ——
+   dateTextRel 必须把号数补回来 */
+ok('★ 就算 friendly 只说「昨天」，也补上了 10月3日',
+  /10月3日/.test(Diary.dateTextRel('2026-10-03')), Diary.dateTextRel('2026-10-03'));
+ok('相对说法还留着（昨天/今天）',
+  /昨天|今天|前天|10月3日/.test(Diary.dateTextRel('2026-10-03')));
+ok('friendly 已经带号数时不会重复补',
+  Diary.dateTextRel('2026-08-15').indexOf('8月15日') >= 0);
+
+const wkLabel = Diary.label('week', Diary.keyOf('week', '2026-10-03'));
+ok('★ 周：起止都精确到号', /月\d+日–(\d{4}年)?\d+月\d+日/.test(wkLabel), wkLabel);
+ok('周：不再用 10/3 这种斜杠写法', !/\d\/\d/.test(wkLabel), wkLabel);
+ok('周：还留着第几周', /第\d周/.test(wkLabel), wkLabel);
+
+const moLabel = Diary.label('month', '2026-10');
+ok('★ 月：带上号数区间', /10月1日–10月31日/.test(moLabel), moLabel);
+
+const yrLabel = Diary.label('year', '2026');
+ok('★ 年：带上号数区间', /1月1日–12月31日/.test(yrLabel), yrLabel);
+
+ok('★ 日档的 label 也带号数', /10月3日/.test(Diary.label('day', '2026-10-03')),
+  Diary.label('day', '2026-10-03'));
+ok('空值不炸', Diary.dateText('') === '' && Diary.dateText(null) === '');
 
 console.log('\n─────────────────────────────');
 console.log('日记模块: ' + pass + ' 通过, ' + fail + ' 失败');
