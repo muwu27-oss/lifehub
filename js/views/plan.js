@@ -224,7 +224,13 @@
     return U.el('div', {
       class: 'card tight',
       style: { display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px', cursor: 'pointer' },
-      onclick: () => Views.editTask(t.id)
+      /* 传的是**任务对象**，不是 id —— Views.editTask(task, defaults) 收对象。
+         这里原来写的是 t.id，于是 Object.assign({}, 'ta_xxx') 变成
+         一个按字符下标排列的对象：没有 id、也没有 title。
+         后果不只是「编辑框是空的」：isNew 为 false 所以「删除」按钮照样出现，
+         而 t.id 是 undefined，删除时 S.remove('tasks', undefined) 会把
+         **所有顶层任务一起删掉**（详见 store.js 里 remove 的闸门注释）。 */
+      onclick: () => Views.editTask(t)
     }, [
       nums,
       U.el('div', { style: { flex: '1', minWidth: '0' } }, [

@@ -238,6 +238,53 @@ ok('子任务不出现在长期栏', S.longTerm().length === 1 && S.longTerm()[0
   S.longTerm().map(t => t.title).join(','));
 ok('子任务从属于父任务', S.children(pa.id).length === 1);
 
+/* ── 数据安全闸门：删除时传了空 id（真实事故） ──
+   长期任务那一行原来写的是 Views.editTask(t.id)，传成了字符串；
+   编辑器里 Object.assign({}, 'ta_xxx') 得到一个**没有 id** 的副本，
+   于是删除时调用 S.remove('tasks', undefined)。
+   而 remove 里的 filter 判的是 `t.parentId !== id` —— 顶层任务的 parentId
+   恰好也是 undefined，两边相等 → 被过滤掉 → **所有顶层任务一起没了**。
+   一行参数传错就能清空整个任务库，所以这里把它钉死。
+
+   守两件事：① 空 id 必须被拒绝，一个任务都不能少；
+   ② 正常删除的行为完全不变（别为了修 bug 把正常删除弄坏）。 */
+S.reset();
+S.init();
+const keep1 = S.add('tasks', { title: '长期甲', cat: 'cv' });
+const keep2 = S.add('tasks', { title: '长期乙', cat: 'cv' });
+const keep3 = S.add('tasks', { title: '有截止的', cat: 'study', due: d(5) });
+const kid = S.add('tasks', { title: '子任务', cat: 'cv', parentId: keep1.id });
+const before = S.all('tasks').length;
+
+/* 故意走闸门，别让 expected 的报错日志刷屏 */
+const realErr = console.error;
+console.error = () => {};
+const rUndef = S.remove('tasks', undefined);
+const rNull = S.remove('tasks', null);
+const rEmpty = S.remove('tasks', '');
+console.error = realErr;
+
+eq('传 undefined 被拒绝', rUndef, false);
+eq('传 null 被拒绝', rNull, false);
+eq('传空字符串被拒绝', rEmpty, false);
+eq('★ 一个任务都没少', S.all('tasks').length, before);
+ok('★ 三个顶层任务全都还在',
+  ['长期甲', '长期乙', '有截止的'].every(n => S.all('tasks').some(t => t.title === n)),
+  S.all('tasks').map(t => t.title).join(','));
+
+/* 正常删除仍然有效，而且只删该删的 */
+eq('传真 id 时删得掉', S.remove('tasks', keep2.id), true);
+eq('只少了一个', S.all('tasks').length, before - 1);
+ok('没牵连别的任务', S.all('tasks').some(t => t.title === '长期甲')
+  && S.all('tasks').some(t => t.title === '有截止的'));
+ok('删不存在的 id 只返回 false，不误伤',
+  S.remove('tasks', 'ta_根本不存在') === false && S.all('tasks').length === before - 1);
+/* 删父任务连带删子任务：原有语义不能因为加闸门而丢掉 */
+S.remove('tasks', keep1.id);
+ok('删父任务仍会带走子任务', !S.all('tasks').some(t => t.id === kid.id));
+ok('但没带走别人', S.all('tasks').some(t => t.title === '有截止的'));
+void keep3;
+
 /* ═══════════ 7. 提醒时间可配置 ═══════════ */
 console.log('\n=== 7. 提醒时刻跟随设置 ===');
 

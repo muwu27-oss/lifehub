@@ -341,6 +341,19 @@
     },
 
     remove(coll, id) {
+      /* ⚠️ 闸门：id 必须是真值，否则**直接拒绝**，绝不动数据。
+         真出过事：长期任务那一行把 Views.editTask(t.id) 传成了字符串，
+         于是编辑器里拿到的是一个没有 id 的副本，删除时调用
+         S.remove('tasks', undefined)。而下面那条 filter 判的是
+         `t.parentId !== id` —— 顶层任务的 parentId 恰好也是 undefined，
+         于是「删一个不存在的任务」变成「把所有顶层任务全删光」。
+         一行参数传错就能清空整个任务库，所以这里必须 fail closed：
+         宁可这一次删不掉（返回 false），也不能猜用户想删什么。 */
+      if (!id) {
+        console.error('[store] remove 收到空的 id，已拒绝执行', coll, id);
+        return false;
+      }
+
       /* 删父任务时把子任务一并删掉，避免留下孤儿。
          注意必须先删子任务再定位父任务下标，否则下标会因数组变动而失效。 */
       if (coll === 'tasks') {

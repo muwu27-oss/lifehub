@@ -4,7 +4,7 @@
 #   ./test/run-all.sh
 cd "$(dirname "$0")/.."
 total=0
-for t in parser schedule schedule2 remind diet income foodai billimport wechat txnrule backup history integration diary diary-browser browser; do
+for t in parser schedule schedule2 remind diet income foodai billimport wechat txnrule backup history integration diary diary-browser task-delete-browser browser; do
   printf "%-20s " "$t.test.js"
   out=$(node test/$t.test.js 2>&1 | grep -oE '[0-9]+ 通过, [0-9]+ 失败' | tail -1)
   echo "${out:-运行失败}"
